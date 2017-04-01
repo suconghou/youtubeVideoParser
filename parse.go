@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-var debug bool = true
+var debug bool = false
 
 var youtube_video_host string = "http://www.youtube.com/get_video_info?video_id="
 
@@ -16,14 +16,12 @@ func Parse(id string) (videoInfo, error) {
 	var info videoInfo
 	var u string = fmt.Sprintf("%s%s%s", youtube_video_host, id, "&asv=3&el=detailpage&hl=en_US")
 	res, err := HttpGet(u)
-	if err !=nil {
-		return info,err
+	if err != nil {
+		return info, err
 	}
-	info,err=getVideoInfo(string(res))
-	return info,err
+	info, err = getVideoInfo(string(res))
+	return info, err
 }
-
-
 
 func getVideoInfo(res string) (videoInfo, error) {
 	var info videoInfo
@@ -57,12 +55,10 @@ func getVideoInfo(res string) (videoInfo, error) {
 	return info, nil
 }
 
-
 func decodeVideoInfo(values url.Values) (streamList, error) {
 	var streams streamList
 	stream_map := values["url_encoded_fmt_stream_map"]
 	streams_list := strings.Split(stream_map[0], ",")
-
 	for stream_pos, stream_raw := range streams_list {
 		stream_qry, err := url.ParseQuery(stream_raw)
 		if err != nil {
@@ -75,35 +71,24 @@ func decodeVideoInfo(values url.Values) (streamList, error) {
 			continue
 		}
 		stream := stream{
-			"quality": stream_qry["quality"][0],
-			"type":    stream_qry["type"][0],
+			"quality": tQuality(stream_qry["quality"][0]),
+			"type":    tFormat(stream_qry["type"][0]),
 			"url":     stream_qry["url"][0],
-			"sig":     "",
 		}
+		var streamsig string
 		if sig, exists := stream_qry["sig"]; exists { // old one
-			stream["sig"] = sig[0]
+			streamsig = sig[0]
 		}
-
 		if sig, exists := stream_qry["s"]; exists { // now they use this
-			stream["sig"] = sig[0]
+			streamsig = sig[0]
 		}
-
+		stream["url"] = tUrl(stream["url"], streamsig)
 		streams = append(streams, stream)
-		quality := stream.Quality()
-		if quality == QUALITY_UNKNOWN {
-			log("Found unknown quality '%s'", stream["quality"])
-		}
 
-		format := stream.Format()
-		if format == FORMAT_UNKNOWN {
-			log("Found unknown format '%s'", stream["type"])
-		}
-
-		log("Stream found: quality '%s', format '%s'", quality, format)
+		log("Stream found: quality '%s', format '%s'", stream["quality"], stream["type"])
 	}
-
 	log("Successfully decoded %d streams", len(streams))
-	return streams,nil
+	return streams, nil
 }
 
 func HttpGet(url string) ([]byte, error) {
