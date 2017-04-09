@@ -3,7 +3,7 @@ package youtubeVideoParser
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
+	_ "strings"
 )
 
 const (
@@ -27,6 +27,13 @@ var mapedQualities map[string]string = map[string]string{
 	QUALITY_LARGE:   QUALITY_LARGE,
 	QUALITY_MEDIUM:  QUALITY_MEDIUM,
 	QUALITY_SMALL:   QUALITY_SMALL,
+}
+
+var mimeMap map[string]string = map[string]string{
+	"video/3gpp":  FORMAT_3GP,
+	"video/mp4":   FORMAT_MP4,
+	"video/webm":  FORMAT_WEBM,
+	"video/x-flv": FORMAT_FLV,
 }
 
 var formatsTrigger map[string]string = map[string]string{
@@ -57,8 +64,16 @@ var sortedFormats []string = []string{
 	FORMAT_3GP,
 }
 
-type stream map[string]string
-type streamList []stream
+type streamItem struct {
+	Itag      string
+	Url       string
+	Sig       string
+	S         string
+	Quality   string
+	Type      string
+	Mime      string
+	Container string
+}
 
 type videoInfo struct {
 	Id       string
@@ -66,7 +81,7 @@ type videoInfo struct {
 	Duration string
 	Keywords string
 	Author   string
-	Stream   streamList
+	Stream   map[string]streamItem
 }
 
 func (info videoInfo) ToJson() ([]byte, error) {
@@ -75,7 +90,6 @@ func (info videoInfo) ToJson() ([]byte, error) {
 	} else {
 		return bs, nil
 	}
-
 }
 
 func (info videoInfo) GetStream(quality string, preferType string) (string, string, error) {
@@ -112,11 +126,11 @@ func (info videoInfo) GetStream(quality string, preferType string) (string, stri
 func (info videoInfo) GetSuchStream(quality string, preferType string) (string, string, error) {
 	var urls map[string]string = map[string]string{}
 	for _, item := range info.Stream {
-		if item["quality"] == quality {
-			if item["type"] == preferType {
-				return item["url"], item["type"], nil
+		if item.Quality == quality {
+			if item.Container == preferType {
+				return item.Url, item.Container, nil
 			} else {
-				urls[item["type"]] = item["url"]
+				urls[item.Container] = item.Url
 			}
 		} else {
 			continue
@@ -128,24 +142,4 @@ func (info videoInfo) GetSuchStream(quality string, preferType string) (string, 
 		}
 	}
 	return "", "", fmt.Errorf("not found such stream")
-}
-
-func tUrl(url string, sig string) string {
-	return url + "&signature=" + sig
-}
-
-func tFormat(types string) string {
-	for format, trigger := range formatsTrigger {
-		if strings.Contains(types, trigger) {
-			return format
-		}
-	}
-	return FORMAT_MP4
-}
-
-func tQuality(qualitystr string) string {
-	if quality, ok := mapedQualities[qualitystr]; ok {
-		return quality
-	}
-	return QUALITY_SMALL
 }

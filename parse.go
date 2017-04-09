@@ -1,94 +1,153 @@
 package youtubeVideoParser
 
 import (
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"net/http"
 	"net/url"
+	_ "os"
+	"regexp"
 	"strings"
 )
 
-var debug bool = false
+var debug bool = true
 
-var youtube_video_host string = "http://www.youtube.com/get_video_info?video_id="
+var ytplayer_config_regexp *regexp.Regexp = regexp.MustCompile(`ytplayer.config\s*=\s*([^\n]+?});`)
+
+var youtube_video_host string = "https://www.youtube.com/get_video_info?video_id=%s"
+var video_page_host string = "https://www.youtube.com/watch?v=%s"
+var html5player_host string = "https://www.youtube.com%s"
+
+type ytplayerConfig struct {
+	Args struct {
+		Url_encoded_fmt_stream_map string
+		Author                     string
+		Length_seconds             string
+		Title                      string
+		Keywords                   string
+		View_count                 string
+		Thumbnail_url              string
+		Video_id                   string
+		Caption_tracks             string
+		Dashmpd                    string
+		Livestream                 string
+		Live_playback              string
+		Hlsvp                      string
+		Adaptive_fmts              string
+	}
+	Assets struct {
+		Css string
+		Js  string
+	}
+}
 
 func Parse(id string) (videoInfo, error) {
 	var info videoInfo
-	var u string = fmt.Sprintf("%s%s%s", youtube_video_host, id, "&asv=3&el=detailpage&hl=en_US")
-	res, err := HttpGet(u)
+	var u string = fmt.Sprintf(video_page_host, id)
+	res, err := HttpGet(fmt.Sprintf(youtube_video_host, id))
 	if err != nil {
 		return info, err
 	}
-	info, err = getVideoInfo(string(res))
-	return info, err
-}
-
-func getVideoInfo(res string) (videoInfo, error) {
-	var info videoInfo
-	values, err := url.ParseQuery(res)
-	err = ensureFields(values, []string{"status", "url_encoded_fmt_stream_map", "title", "author", "length_seconds", "keywords", "video_id"})
+	values, err := url.ParseQuery(string(res))
 	if err != nil {
 		return info, err
 	}
-	status := values["status"]
-	if status[0] == "fail" {
-		reason, ok := values["reason"]
-		if ok {
-			return info, fmt.Errorf("'fail' response status found in the server's answer, reason: '%s'", reason[0])
+	if status, ok := values["status"]; !ok {
+		log("no status")
+		return info, fmt.Errorf("error no status found in get_video_info")
+	} else if status[0] == "ok" {
+		video_page, err := HttpGet(u)
+		if err != nil {
+			return info, err
+		}
+		var parsePage bool
+		if _, ok := values["use_cipher_signature"]; !ok {
+			parsePage = false
+		} else if v, ok := values["use_cipher_signature"]; ok && v[0] == "False" {
+			parsePage = false
 		} else {
-			return info, fmt.Errorf("'fail' response status found in the server's answer, no reason given")
+			parsePage = true
 		}
-	}
-	if status[0] != "ok" {
-		return info, fmt.Errorf("non-success response status found in the server's answer (status: '%s')", status)
-	}
-	info.Id = values["video_id"][0]
-	info.Title = values["title"][0]
-	info.Duration = values["length_seconds"][0]
-	info.Keywords = values["keywords"][0]
-	info.Author = values["author"][0]
-	streams, err := decodeVideoInfo(values)
-	if err != nil {
-		return info, err
-	}
-	info.Stream = streams
-	return info, nil
-}
+		if parsePage {
 
-func decodeVideoInfo(values url.Values) (streamList, error) {
-	var streams streamList
-	stream_map := values["url_encoded_fmt_stream_map"]
-	streams_list := strings.Split(stream_map[0], ",")
-	for stream_pos, stream_raw := range streams_list {
-		stream_qry, err := url.ParseQuery(stream_raw)
-		if err != nil {
-			log(fmt.Sprintf("An error occured while decoding one of the video's stream's information: stream %d: %s\n", stream_pos, err))
-			continue
 		}
-		err = ensureFields(stream_qry, []string{"quality", "type", "url"})
-		if err != nil {
-			log(fmt.Sprintf("Missing fields in one of the video's stream's information: stream %d: %s\n", stream_pos, err))
-			continue
-		}
-		stream := stream{
-			"quality": tQuality(stream_qry["quality"][0]),
-			"type":    tFormat(stream_qry["type"][0]),
-			"url":     stream_qry["url"][0],
-		}
-		var streamsig string
-		if sig, exists := stream_qry["sig"]; exists { // old one
-			streamsig = sig[0]
-		}
-		if sig, exists := stream_qry["s"]; exists { // now they use this
-			streamsig = sig[0]
-		}
-		stream["url"] = tUrl(stream["url"], streamsig)
-		streams = append(streams, stream)
+		ytplayer_config_matches := ytplayer_config_regexp.FindStringSubmatch(string(video_page))
+		info.Id = values["video_id"][0]
+		info.Title = values["title"][0]
+		info.Duration = values["length_seconds"][0]
+		info.Keywords = values["keywords"][0]
+		info.Author = values["author"][0]
+		if len(ytplayer_config_matches) > 1 {
+			cfgInfo := &ytplayerConfig{}
+			err := json.Unmarshal([]byte(ytplayer_config_matches[1]), &cfgInfo)
+			if err != nil {
+				return info, err
+			}
+			var html5playerUrl string = fmt.Sprintf(html5player_host, cfgInfo.Assets.Js)
+			var stream_list []string = strings.Split(cfgInfo.Args.Url_encoded_fmt_stream_map, ",")
+			streams, err := parseStream(stream_list)
+			if err != nil {
+				return info, err
+			}
+			info.Stream = streams
+			if html5playerUrl != "" {
 
-		log("Stream found: quality '%s', format '%s'", stream["quality"], stream["type"])
+			}
+			return info, nil
+		} else {
+			log("ytplayer_config not match in page source")
+			stream_list := strings.Split(values["url_encoded_fmt_stream_map"][0], ",")
+			streams, err := parseStream(stream_list)
+			info.Stream = streams
+			if err != nil {
+				return info, err
+			}
+			return info, nil
+		}
+	} else if status[0] == "fail" {
+		log("get get_video_info failed")
+		if values["errorcode"][0] == "150" {
+			video_page, err := HttpGet(u)
+			if err != nil {
+				return info, err
+			}
+			ytplayer_config_matches := ytplayer_config_regexp.FindStringSubmatch(string(video_page))
+			if len(ytplayer_config_matches) > 1 {
+				cfgInfo := &ytplayerConfig{}
+				err := json.Unmarshal([]byte(ytplayer_config_matches[1]), &cfgInfo)
+				if err != nil {
+					return info, err
+				}
+				if cfgInfo.Args.Title != "" {
+					info.Title = cfgInfo.Args.Title
+					info.Duration = cfgInfo.Args.Length_seconds
+					info.Id = cfgInfo.Args.Video_id
+					info.Keywords = cfgInfo.Args.Keywords
+					info.Author = cfgInfo.Args.Author
+					var stream_list []string = strings.Split(cfgInfo.Args.Url_encoded_fmt_stream_map, ",")
+					streams, err := parseStream(stream_list)
+					if err != nil {
+						return info, err
+					}
+					info.Stream = streams
+					return info, nil
+				} else {
+					return info, fmt.Errorf("[Error] The uploader has not made this video available in your country.")
+				}
+			} else {
+				return info, fmt.Errorf("[Failed] ")
+			}
+		} else if values["errorcode"][0] == "100" {
+			return info, fmt.Errorf("[Failed] This video does not exist.")
+		} else {
+			return info, fmt.Errorf("[Failed] %s", values["reason"][0])
+		}
+	} else {
+		log("unknow status")
+		return info, fmt.Errorf("[Failed] unknow status")
 	}
-	log("Successfully decoded %d streams", len(streams))
-	return streams, nil
+	return info, err
 }
 
 func HttpGet(url string) ([]byte, error) {
@@ -117,4 +176,41 @@ func log(format string, params ...interface{}) {
 	if debug {
 		fmt.Printf(format+"\n", params...)
 	}
+}
+
+func parseStream(stream_list []string) (map[string]streamItem, error) {
+	res := map[string]streamItem{}
+	for _, item := range stream_list {
+		metadata, _ := url.ParseQuery(item)
+		stream_itag := metadata["itag"][0]
+		var sig, s, mime string
+		if v, ok := metadata["sig"]; ok {
+			sig = v[0]
+		}
+		if v, ok := metadata["s"]; ok {
+			s = v[0]
+		}
+		if v, ok := metadata["type"]; ok {
+			arr := strings.Split(v[0], ";")
+			mime = arr[0]
+		}
+		res[stream_itag] = streamItem{
+			Itag:      stream_itag,
+			Url:       metadata["url"][0],
+			Sig:       sig,
+			S:         s,
+			Quality:   metadata["quality"][0],
+			Type:      metadata["type"][0],
+			Mime:      mime,
+			Container: mime_to_container(mime),
+		}
+	}
+	return res, nil
+}
+
+func mime_to_container(mime string) string {
+	if v, ok := mimeMap[mime]; ok {
+		return v
+	}
+	return strings.Split(mime, "/")[1]
 }
