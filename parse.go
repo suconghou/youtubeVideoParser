@@ -1,51 +1,21 @@
 package youtubeVideoParser
 
 import (
-	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"net/http"
 	"net/url"
-	_ "os"
-	"regexp"
+	"strconv"
 	"strings"
+
+	"github.com/bitly/go-simplejson"
 )
 
-var debug bool = true
-
-var ytplayer_config_regexp *regexp.Regexp = regexp.MustCompile(`ytplayer.config\s*=\s*([^\n]+?});`)
-
-var youtube_video_host string = "https://www.youtube.com/get_video_info?video_id=%s"
-var video_page_host string = "https://www.youtube.com/watch?v=%s"
-var html5player_host string = "https://www.youtube.com%s"
-
-type ytplayerConfig struct {
-	Args struct {
-		Url_encoded_fmt_stream_map string
-		Author                     string
-		Length_seconds             string
-		Title                      string
-		Keywords                   string
-		View_count                 string
-		Thumbnail_url              string
-		Video_id                   string
-		Caption_tracks             string
-		Dashmpd                    string
-		Livestream                 string
-		Live_playback              string
-		Hlsvp                      string
-		Adaptive_fmts              string
-	}
-	Assets struct {
-		Css string
-		Js  string
-	}
-}
-
-func Parse(id string) (videoInfo, error) {
-	var info videoInfo
-	var u string = fmt.Sprintf(video_page_host, id)
-	res, err := HttpGet(fmt.Sprintf(youtube_video_host, id))
+// Parse parse video info by id
+func Parse(id string) (*VideoInfo, error) {
+	u := fmt.Sprintf(videoPageHost, id)
+	info := &VideoInfo{ID: id, Streams: make(map[string]*StreamItem)}
+	res, err := httpGet(fmt.Sprintf(youtubeVideoHost, id))
 	if err != nil {
 		return info, err
 	}
@@ -53,164 +23,223 @@ func Parse(id string) (videoInfo, error) {
 	if err != nil {
 		return info, err
 	}
-	if status, ok := values["status"]; !ok {
-		log("no status")
-		return info, fmt.Errorf("error no status found in get_video_info")
-	} else if status[0] == "ok" {
-		video_page, err := HttpGet(u)
+	status := values.Get("status")
+	if status == "ok" {
+		info.Title = values.Get("title")
+		info.Duration = values.Get("length_seconds")
+		info.Keywords = values.Get("keywords")
+		info.Author = values.Get("author")
+		stream, err := getstream(values.Get("url_encoded_fmt_stream_map"), false)
 		if err != nil {
 			return info, err
 		}
-		var parsePage bool
-		if _, ok := values["use_cipher_signature"]; !ok {
-			parsePage = false
-		} else if v, ok := values["use_cipher_signature"]; ok && v[0] == "False" {
-			parsePage = false
-		} else {
-			parsePage = true
+		info.DefaultStram = stream
+		videoPage, err := httpGet(u)
+		if err != nil {
+			return info, err
 		}
-		if parsePage {
-
-		}
-		ytplayer_config_matches := ytplayer_config_regexp.FindStringSubmatch(string(video_page))
-		info.Id = values["video_id"][0]
-		info.Title = values["title"][0]
-		info.Duration = values["length_seconds"][0]
-		info.Keywords = values["keywords"][0]
-		info.Author = values["author"][0]
-		if len(ytplayer_config_matches) > 1 {
-			cfgInfo := &ytplayerConfig{}
-			err := json.Unmarshal([]byte(ytplayer_config_matches[1]), &cfgInfo)
+		ytplayerConfigMatches := ytplayerConfigRegexp.FindSubmatch(videoPage)
+		if len(ytplayerConfigMatches) > 1 {
+			jsonstr := ytplayerConfigMatches[1]
+			js, err := simplejson.NewJson(jsonstr)
 			if err != nil {
 				return info, err
 			}
-			var html5playerUrl string = fmt.Sprintf(html5player_host, cfgInfo.Assets.Js)
-			var stream_list []string = strings.Split(cfgInfo.Args.Url_encoded_fmt_stream_map, ",")
-			streams, err := parseStream(stream_list)
-			if err != nil {
-				return info, err
-			}
-			info.Stream = streams
-			if html5playerUrl != "" {
-
-			}
-			return info, nil
-		} else {
-			log("ytplayer_config not match in page source")
-			stream_list := strings.Split(values["url_encoded_fmt_stream_map"][0], ",")
-			streams, err := parseStream(stream_list)
-			info.Stream = streams
-			if err != nil {
-				return info, err
-			}
-			return info, nil
-		}
-	} else if status[0] == "fail" {
-		log("get get_video_info failed")
-		if values["errorcode"][0] == "150" {
-			video_page, err := HttpGet(u)
-			if err != nil {
-				return info, err
-			}
-			ytplayer_config_matches := ytplayer_config_regexp.FindStringSubmatch(string(video_page))
-			if len(ytplayer_config_matches) > 1 {
-				cfgInfo := &ytplayerConfig{}
-				err := json.Unmarshal([]byte(ytplayer_config_matches[1]), &cfgInfo)
+			streamstr := js.GetPath("args", "url_encoded_fmt_stream_map").MustString()
+			streams := strings.Split(streamstr, ",")
+			for _, item := range streams {
+				strItem, err := getstream(item, false)
 				if err != nil {
 					return info, err
 				}
-				if cfgInfo.Args.Title != "" {
-					info.Title = cfgInfo.Args.Title
-					info.Duration = cfgInfo.Args.Length_seconds
-					info.Id = cfgInfo.Args.Video_id
-					info.Keywords = cfgInfo.Args.Keywords
-					info.Author = cfgInfo.Args.Author
-					var stream_list []string = strings.Split(cfgInfo.Args.Url_encoded_fmt_stream_map, ",")
-					streams, err := parseStream(stream_list)
+				info.Streams[strItem.Itag] = strItem
+			}
+			parseMore(js, info)
+		}
+		return info, nil
+	} else if status == "fail" {
+		errorcode := values.Get("errorcode")
+		reason := values.Get("reason")
+		curerr := fmt.Errorf("errorcode %s:%s", errorcode, reason)
+		if errorcode == "150" {
+			if strings.Contains(reason, "unavailable") {
+				return info, curerr
+			}
+			videoPage, err := httpGet(u)
+			if err != nil {
+				return info, err
+			}
+			ytplayerConfigMatches := ytplayerConfigRegexp.FindSubmatch(videoPage)
+			if len(ytplayerConfigMatches) > 1 {
+				jsonstr := ytplayerConfigMatches[1]
+				js, err := simplejson.NewJson(jsonstr)
+				if err != nil {
+					return info, err
+				}
+				info.Title = js.GetPath("args", "title").MustString()
+				info.Duration = js.GetPath("args", "length_seconds").MustString()
+				info.Author = js.GetPath("args", "author").MustString()
+				info.Keywords = js.GetPath("args", "keywords").MustString()
+				streamstr := js.GetPath("args", "url_encoded_fmt_stream_map").MustString()
+				streams := strings.Split(streamstr, ",")
+				for _, item := range streams {
+					strItem, err := getstream(item, false)
 					if err != nil {
 						return info, err
 					}
-					info.Stream = streams
-					return info, nil
-				} else {
-					return info, fmt.Errorf("[Error] The uploader has not made this video available in your country.")
+					info.Streams[strItem.Itag] = strItem
 				}
-			} else {
-				return info, fmt.Errorf("[Failed] ")
+				parseMore(js, info)
 			}
-		} else if values["errorcode"][0] == "100" {
-			return info, fmt.Errorf("[Failed] This video does not exist.")
 		} else {
-			return info, fmt.Errorf("[Failed] %s", values["reason"][0])
+			return info, curerr
 		}
+		return info, nil
 	} else {
-		log("unknow status")
-		return info, fmt.Errorf("[Failed] unknow status")
+		return info, fmt.Errorf("error status: %s in get_video_info", status)
 	}
-	return info, err
 }
 
-func HttpGet(url string) ([]byte, error) {
-	res, err := http.Get(url)
+func parseMore(js *simplejson.Json, info *VideoInfo) {
+	fmts := js.GetPath("args", "adaptive_fmts").MustString()
+	if fmts != "" {
+		streams := strings.Split(fmts, ",")
+		for _, item := range streams {
+			strItem, err := getstream(item, true)
+			if err == nil {
+				info.Streams[strItem.Itag] = strItem
+			}
+		}
+	}
+
+}
+
+// GetYoutubeVideoInfo return all video info format in json
+func GetYoutubeVideoInfo(id string) ([]byte, error) {
+	info, err := Parse(id)
 	if err != nil {
 		return nil, err
 	}
-	str, err := ioutil.ReadAll(res.Body)
-	res.Body.Close()
+	return info.Stringify()
+}
+
+// GetYoutubeImageURL return img url
+func GetYoutubeImageURL(id string, imgtype string, quality string) string {
+	var (
+		host           string
+		qa             string
+		defaultType    = "webp"
+		defaultQuality = "medium"
+	)
+	if v, ok := youtubeImageHostMap[imgtype]; ok {
+		host = v
+	} else {
+		host = youtubeImageHostMap[defaultType]
+	}
+	if v, ok := youtubeImageMap[quality]; ok {
+		qa = v
+	} else {
+		qa = youtubeImageMap[defaultQuality]
+	}
+	return fmt.Sprintf("%s%s/%s.%s", host, id, qa, imgtype)
+}
+
+// GetYoutubeVideoURL return video url
+func GetYoutubeVideoURL(id string, videotype string, quality string) (string, error) {
+	info, err := Parse(id)
 	if err != nil {
-		return str, err
+		return "", err
 	}
-	return str, nil
+	return info.MustGetVideoURL(videotype, quality), nil
 }
 
-func ensureFields(source url.Values, fields []string) error {
-	for _, field := range fields {
-		if _, exists := source[field]; !exists {
-			return fmt.Errorf("Field '%s' is missing in url.Values source", field)
-		}
+func httpGet(url string) ([]byte, error) {
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, err
 	}
-	return nil
+	defer resp.Body.Close()
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return body, err
+	}
+	return body, nil
 }
 
-func log(format string, params ...interface{}) {
-	if debug {
-		fmt.Printf(format+"\n", params...)
+// 两种格式的解析
+func getstream(str string, more bool) (*StreamItem, error) {
+	if str != "" {
+		values, err := url.ParseQuery(str)
+		if err != nil {
+			return nil, err
+		}
+		item := &StreamItem{
+			Quality: values.Get("quality"),
+			URL:     values.Get("url"),
+			Type:    values.Get("type"),
+			Itag:    values.Get("itag"),
+		}
+		mime := strings.Split(item.Type, ";")[0]
+		item.Mime = mime
+		item.Container = mimeMap[mime]
+		if more {
+			item.URL = fmt.Sprintf("%s&ratebypass=yes", item.URL) // get over speed limiting
+			item.Quality = getQuality(&values)
+		}
+		s := values.Get("s")
+		if s != "" {
+			item.URL = decipher(item, s)
+		}
+		return item, nil
 	}
+	return nil, nil
 }
 
-func parseStream(stream_list []string) (map[string]streamItem, error) {
-	res := map[string]streamItem{}
-	for _, item := range stream_list {
-		metadata, _ := url.ParseQuery(item)
-		stream_itag := metadata["itag"][0]
-		var sig, s, mime string
-		if v, ok := metadata["sig"]; ok {
-			sig = v[0]
+func decipher(item *StreamItem, s string) string {
+	var (
+		reverse = func(arr []string) []string {
+			for i, j := 0, len(arr)-1; i < j; i, j = i+1, j-1 {
+				arr[i], arr[j] = arr[j], arr[i]
+			}
+			return arr
 		}
-		if v, ok := metadata["s"]; ok {
-			s = v[0]
+		swap = func(arr []string, b int) []string {
+			c := arr[0]
+			arr[0] = arr[b%len(arr)]
+			arr[b] = c
+			return arr
 		}
-		if v, ok := metadata["type"]; ok {
-			arr := strings.Split(v[0], ";")
-			mime = arr[0]
-		}
-		res[stream_itag] = streamItem{
-			Itag:      stream_itag,
-			Url:       metadata["url"][0],
-			Sig:       sig,
-			S:         s,
-			Quality:   metadata["quality"][0],
-			Type:      metadata["type"][0],
-			Mime:      mime,
-			Container: mime_to_container(mime),
-		}
-	}
-	return res, nil
+	)
+	arr := reverse(strings.Split(s[3:], ""))
+	arr = swap(arr, 36)
+	arr = swap(arr[1:], 48)
+	return fmt.Sprintf("%s&signature=%s", item.URL, strings.Join(arr, ""))
 }
 
-func mime_to_container(mime string) string {
-	if v, ok := mimeMap[mime]; ok {
-		return v
+func getQuality(v *url.Values) string {
+	q := v.Get("quality_label")
+	if q != "" { // video
+		if strings.Contains(q, "144p") || strings.Contains(q, "240p") {
+			return qualitySMALL
+		} else if strings.Contains(q, "360p") {
+			return qualityMEDIUM
+		} else if strings.Contains(q, "480p") {
+			return qualityLARGE
+		} else if strings.Contains(q, "720p") {
+			return qualityHD720
+		} else if strings.Contains(q, "1080p") {
+			return qualityHD1080
+		}
+		return qualityHIGHRES
 	}
-	return strings.Split(mime, "/")[1]
+	bitrate, err := strconv.Atoi(v.Get("bitrate"))
+	if err == nil { // audio
+		if bitrate <= 90000 {
+			return qualitySMALL
+		} else if bitrate > 90000 && bitrate <= 140000 {
+			return qualityMEDIUM
+		}
+		return qualityLARGE
+	}
+	return qualityHIGHRES
 }
