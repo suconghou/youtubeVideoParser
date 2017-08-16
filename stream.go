@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strings"
 )
 
 const (
@@ -98,7 +99,7 @@ func (v *VideoInfo) GetVideoItem(ext string, quality string) (*StreamItem, error
 	vtype := videoTypes[ext]
 	if vtype != "" {
 		for _, item := range v.Streams {
-			if item.Quality == quality && item.Mime == vtype {
+			if item.Quality == quality && item.Mime == vtype && strings.Contains(item.Type, ",") { // have audio and video
 				return item, nil
 			}
 		}
@@ -110,14 +111,14 @@ func (v *VideoInfo) GetVideoItem(ext string, quality string) (*StreamItem, error
 func (v *VideoInfo) MustGetVideoURL(ext string, quality string) string {
 	u, err := v.GetVideoItem(ext, quality)
 	if err != nil {
-		for _, f := range sortedFormats {
-			u, err = v.GetVideoItem(f, quality)
+		for _, q := range sortedQualities {
+			u, err = v.GetVideoItem(ext, q)
 			if err == nil {
 				return u.URL
 			}
 		}
-		for _, q := range sortedQualities {
-			u, err = v.GetVideoItem(ext, q)
+		for _, f := range sortedFormats {
+			u, err = v.GetVideoItem(f, quality)
 			if err == nil {
 				return u.URL
 			}
