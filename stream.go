@@ -25,6 +25,7 @@ const (
 
 var (
 	ytplayerConfigRegexp = regexp.MustCompile(`ytplayer.config\s*=\s*([^\n]+?});`)
+	playerIDRegexp       = regexp.MustCompile(`player-(\w{5,12})`)
 	youtubeImageMap      = map[string]string{
 		"large":  "hqdefault",
 		"medium": "mqdefault",
@@ -76,13 +77,12 @@ type StreamItem struct {
 
 // VideoInfo is a video info
 type VideoInfo struct {
-	ID           string
-	Title        string
-	Duration     string
-	Keywords     string
-	Author       string
-	DefaultStram *StreamItem
-	Streams      map[string]*StreamItem
+	ID       string
+	Title    string
+	Duration string
+	Keywords string
+	Author   string
+	Streams  map[string]*StreamItem
 }
 
 // Stringify return video info []byte string

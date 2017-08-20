@@ -29,11 +29,6 @@ func Parse(id string) (*VideoInfo, error) {
 		info.Duration = values.Get("length_seconds")
 		info.Keywords = values.Get("keywords")
 		info.Author = values.Get("author")
-		stream, err := getstream(values.Get("url_encoded_fmt_stream_map"), false)
-		if err != nil {
-			return info, err
-		}
-		info.DefaultStram = stream
 		videoPage, err := httpGet(u)
 		if err != nil {
 			return info, err
@@ -46,15 +41,16 @@ func Parse(id string) (*VideoInfo, error) {
 				return info, err
 			}
 			streamstr := js.GetPath("args", "url_encoded_fmt_stream_map").MustString()
+			html5player := fmt.Sprintf(html5PlayerHost, js.GetPath("assets", "js").MustString())
 			streams := strings.Split(streamstr, ",")
 			for _, item := range streams {
-				strItem, err := getstream(item, false)
+				strItem, err := getstream(item, html5player, false)
 				if err != nil {
 					return info, err
 				}
 				info.Streams[strItem.Itag] = strItem
 			}
-			parseMore(js, info)
+			parseMore(js, info, html5player)
 		}
 		return info, nil
 	} else if status == "fail" {
@@ -81,15 +77,16 @@ func Parse(id string) (*VideoInfo, error) {
 				info.Author = js.GetPath("args", "author").MustString()
 				info.Keywords = js.GetPath("args", "keywords").MustString()
 				streamstr := js.GetPath("args", "url_encoded_fmt_stream_map").MustString()
+				html5player := fmt.Sprintf(html5PlayerHost, js.GetPath("assets", "js").MustString())
 				streams := strings.Split(streamstr, ",")
 				for _, item := range streams {
-					strItem, err := getstream(item, false)
+					strItem, err := getstream(item, html5player, false)
 					if err != nil {
 						return info, err
 					}
 					info.Streams[strItem.Itag] = strItem
 				}
-				parseMore(js, info)
+				parseMore(js, info, html5player)
 			}
 		} else {
 			return info, curerr
@@ -100,18 +97,17 @@ func Parse(id string) (*VideoInfo, error) {
 	}
 }
 
-func parseMore(js *simplejson.Json, info *VideoInfo) {
+func parseMore(js *simplejson.Json, info *VideoInfo, player string) {
 	fmts := js.GetPath("args", "adaptive_fmts").MustString()
 	if fmts != "" {
 		streams := strings.Split(fmts, ",")
 		for _, item := range streams {
-			strItem, err := getstream(item, true)
+			strItem, err := getstream(item, player, true)
 			if err == nil {
 				info.Streams[strItem.Itag] = strItem
 			}
 		}
 	}
-
 }
 
 // GetYoutubeVideoInfo return all video info format in json
@@ -167,7 +163,7 @@ func httpGet(url string) ([]byte, error) {
 }
 
 // 两种格式的解析
-func getstream(str string, more bool) (*StreamItem, error) {
+func getstream(str string, player string, more bool) (*StreamItem, error) {
 	if str != "" {
 		values, err := url.ParseQuery(str)
 		if err != nil {
@@ -188,14 +184,14 @@ func getstream(str string, more bool) (*StreamItem, error) {
 		}
 		s := values.Get("s")
 		if s != "" {
-			item.URL = decipher(item, s)
+			item.URL = decipher(item, s, player)
 		}
 		return item, nil
 	}
 	return nil, nil
 }
 
-func decipher(item *StreamItem, s string) string {
+func decipher(item *StreamItem, s string, player string) string {
 	var (
 		reverse = func(arr []string) []string {
 			for i, j := 0, len(arr)-1; i < j; i, j = i+1, j-1 {
@@ -210,9 +206,20 @@ func decipher(item *StreamItem, s string) string {
 			return arr
 		}
 	)
-	arr := reverse(strings.Split(s[3:], ""))
-	arr = swap(arr, 36)
-	arr = swap(arr[1:], 48)
+	match := playerIDRegexp.FindStringSubmatch(player)
+	var arr []string
+	if len(match) > 1 {
+		id := match[1]
+		if id == "vflAAoWvh" { //20170820 add
+			arr = reverse(strings.Split(s, ""))[1:]
+			arr = reverse(arr)[2:]
+			arr = reverse(arr)[2:]
+		} else { // old
+			arr = reverse(strings.Split(s[3:], ""))
+			arr = swap(arr, 36)
+			arr = swap(arr[1:], 48)
+		}
+	}
 	return fmt.Sprintf("%s&signature=%s", item.URL, strings.Join(arr, ""))
 }
 
