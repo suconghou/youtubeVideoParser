@@ -2,20 +2,19 @@ package youtubeVideoParser
 
 import (
 	"fmt"
-	"io/ioutil"
-	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 
 	"github.com/bitly/go-simplejson"
+	"github.com/suconghou/utilgo"
 )
 
 // Parse parse video info by id
 func Parse(id string) (*VideoInfo, error) {
 	u := fmt.Sprintf(videoPageHost, id)
 	info := &VideoInfo{ID: id, Streams: make(map[string]*StreamItem)}
-	res, err := httpGet(fmt.Sprintf(youtubeVideoHost, id))
+	res, err := utilgo.GetContent(fmt.Sprintf(youtubeVideoHost, id))
 	if err != nil {
 		return info, err
 	}
@@ -29,7 +28,7 @@ func Parse(id string) (*VideoInfo, error) {
 		info.Duration = values.Get("length_seconds")
 		info.Keywords = values.Get("keywords")
 		info.Author = values.Get("author")
-		videoPage, err := httpGet(u)
+		videoPage, err := utilgo.GetContent(u)
 		if err != nil {
 			return info, err
 		}
@@ -61,7 +60,7 @@ func Parse(id string) (*VideoInfo, error) {
 			if strings.Contains(reason, "unavailable") {
 				return info, curerr
 			}
-			videoPage, err := httpGet(u)
+			videoPage, err := utilgo.GetContent(u)
 			if err != nil {
 				return info, err
 			}
@@ -147,19 +146,6 @@ func GetYoutubeVideoURL(id string, videotype string, quality string) (string, er
 		return "", err
 	}
 	return info.MustGetVideoURL(videotype, quality), nil
-}
-
-func httpGet(url string) ([]byte, error) {
-	resp, err := http.Get(url)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return body, err
-	}
-	return body, nil
 }
 
 // 两种格式的解析
