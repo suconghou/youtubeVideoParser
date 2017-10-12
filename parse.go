@@ -14,7 +14,7 @@ import (
 func Parse(id string) (*VideoInfo, error) {
 	u := fmt.Sprintf(videoPageHost, id)
 	info := &VideoInfo{ID: id, Streams: make(map[string]*StreamItem)}
-	res, err := utilgo.GetContent(fmt.Sprintf(youtubeVideoHost, id))
+	res, err := utilgo.GetContent(fmt.Sprintf(youtubeVideoHost, id), 10)
 	if err != nil {
 		return info, err
 	}
@@ -28,7 +28,7 @@ func Parse(id string) (*VideoInfo, error) {
 		info.Duration = values.Get("length_seconds")
 		info.Keywords = values.Get("keywords")
 		info.Author = values.Get("author")
-		videoPage, err := utilgo.GetContent(u)
+		videoPage, err := utilgo.GetContent(u, 10)
 		if err != nil {
 			return info, err
 		}
@@ -60,7 +60,7 @@ func Parse(id string) (*VideoInfo, error) {
 			if strings.Contains(reason, "unavailable") {
 				return info, curerr
 			}
-			videoPage, err := utilgo.GetContent(u)
+			videoPage, err := utilgo.GetContent(u, 10)
 			if err != nil {
 				return info, err
 			}
