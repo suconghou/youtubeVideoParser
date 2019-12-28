@@ -1,19 +1,28 @@
-package youtubeVideoParser
+package youtubevideoparser
 
 import (
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 
-	"github.com/bitly/go-simplejson"
-	"github.com/suconghou/youtubeVideoParser/request"
+	"github.com/suconghou/youtubevideoparser/request"
+	"github.com/tidwall/gjson"
+)
+
+const (
+	baseURL       = "https://www.youtube.com"
+	videoPageHost = baseURL + "/watch?v=%s"
+)
+
+var (
+	ytplayerConfigRegexp = regexp.MustCompile(`;ytplayer.config\s*=\s*({[^\n]+?});ytplayer.load`)
 )
 
 // Parser return instance
 type Parser struct {
 	ID            string
 	VideoPageData []byte
-	VideoInfoData []byte
 }
 
 // VideoInfo contains video info
@@ -22,6 +31,8 @@ type VideoInfo struct {
 	Title    string                 `json:"title"`
 	Duration string                 `json:"duration"`
 	Author   string                 `json:"author"`
+	DashURL  string                 `json:"dashUrl"`
+	HlsURL   string                 `json:"hlsUrl"`
 	Streams  map[string]*StreamItem `json:"streams"`
 }
 
@@ -29,10 +40,8 @@ type VideoInfo struct {
 func NewParser(id string) (*Parser, error) {
 	var (
 		videoPageURL = fmt.Sprintf(videoPageHost, id)
-		videoInfoURL = fmt.Sprintf(videoInfoHost, id)
 		urls         = []string{
 			videoPageURL,
-			videoInfoURL,
 		}
 	)
 	response, err := request.GetURLBody(urls)
@@ -42,119 +51,122 @@ func NewParser(id string) (*Parser, error) {
 	return &Parser{
 		id,
 		response[videoPageURL],
-		response[videoInfoURL],
 	}, nil
 }
 
 // Parse parse video info
 func (p *Parser) Parse() (*VideoInfo, error) {
 	var (
-		info        = &VideoInfo{ID: p.ID, Streams: make(map[string]*StreamItem)}
-		values, err = url.ParseQuery(string(p.VideoInfoData))
+		info                  = &VideoInfo{ID: p.ID, Streams: make(map[string]*StreamItem)}
+		ytplayerConfigMatches = ytplayerConfigRegexp.FindSubmatch(p.VideoPageData)
 	)
+	if len(ytplayerConfigMatches) < 2 {
+		return info, fmt.Errorf("not found")
+	}
+	res := gjson.ParseBytes(ytplayerConfigMatches[1])
+	args := res.Get("args")
+	playerURL := baseURL + res.Get("assets.js").String()
+	body, err := request.GetURLData(playerURL)
 	if err != nil {
+		return nil, err
+	}
+	if err := fmtStreamMap(info, body, args.Get("url_encoded_fmt_stream_map").String()); err != nil {
 		return info, err
 	}
-	if ytplayerConfigMatches := ytplayerConfigRegexp.FindSubmatch(p.VideoPageData); len(ytplayerConfigMatches) > 1 {
-		js, err := simplejson.NewJson(ytplayerConfigMatches[1])
-		if err != nil {
-			return info, err
-		}
-		info.Title = js.GetPath("args", "title").MustString()
-		info.Duration = js.GetPath("args", "length_seconds").MustString()
-		info.Author = js.GetPath("args", "author").MustString()
-		if err = fmtStreamMap(info, js.GetPath("args", "url_encoded_fmt_stream_map").MustString()); err != nil {
-			return info, err
-		}
-		if err = fmtStreamMap(info, js.GetPath("args", "adaptive_fmts").MustString()); err != nil {
-			return info, err
-		}
+	if err := fmtStreamMap(info, body, args.Get("adaptive_fmts").String()); err != nil {
+		return info, err
 	}
-	status := values.Get("status")
-	if status == "ok" {
-		info.Title = values.Get("title")
-		info.Duration = values.Get("length_seconds")
-		info.Author = values.Get("author")
-		if err = fmtStreamMap(info, values.Get("url_encoded_fmt_stream_map")); err != nil {
+	if v := args.Get("player_response").String(); v != "" {
+		if err = playerJSONParse(info, body, gjson.Parse(v)); err != nil {
 			return info, err
-		}
-		if err = fmtStreamMap(info, values.Get("adaptive_fmts")); err != nil {
-			return info, err
-		}
-
-	}
-	if status == "fail" {
-		errorcode := values.Get("errorcode")
-		if errorcode == "2" {
-			// Invalid parameters
-			return info, fmt.Errorf(values.Get("reason"))
-		}
-		if errorcode == "150" {
-			return info, fmt.Errorf(values.Get("reason"))
 		}
 	}
 	return info, nil
 }
 
-func fmtStreamMap(v *VideoInfo, urlEncodedFmtStreamMap string) error {
-	for _, item := range strings.Split(urlEncodedFmtStreamMap, ",") {
-		if item == "" {
+func fmtStreamMap(v *VideoInfo, body []byte, urlEncodedFmtStreamMap string) error {
+	var playerjs = string(body)
+	for _, s := range strings.Split(urlEncodedFmtStreamMap, ",") {
+		if s == "" {
 			return nil
 		}
-		streamMap, err := url.ParseQuery(item)
+		stream, err := url.ParseQuery(s)
 		if err != nil {
 			return err
 		}
-		fmt.Println(streamMap)
-		var quality = streamMap.Get("quality")
+		var itag = stream.Get("itag")
+		var streamType = stream.Get("type")
+		var quality = stream.Get("quality_label")
 		if quality == "" {
-			quality = streamMap.Get("quality_label")
+			if v := stream.Get("qualityLabel"); v != "" {
+				quality = v
+			}
+			if quality == "" {
+				quality = stream.Get("quality")
+			}
 		}
-		v.Streams[streamMap.Get("itag")] = &StreamItem{
+		var contentLength = stream.Get("clen")
+		if contentLength == "" {
+			contentLength = stream.Get("contentLength")
+		}
+		url, err := getDownloadURL(stream, playerjs)
+		if err != nil {
+			return err
+		}
+		v.Streams[itag] = &StreamItem{
 			quality,
-			streamMap.Get("type"),
-			streamMap.Get("url"),
-			streamMap.Get("itag"),
+			streamType,
+			url,
+			itag,
+			contentLength,
 		}
 	}
 	return nil
 }
 
-// Parse parse video info by id
-/**
-
-
-
-// GetYoutubeImageURL return img url
-func GetYoutubeImageURL(id string, imgtype string, quality string) string {
-	var (
-		host           string
-		qa             string
-		defaultType    = "webp"
-		defaultQuality = "medium"
-	)
-	if v, ok := youtubeImageHostMap[imgtype]; ok {
-		host = v
-	} else {
-		host = youtubeImageHostMap[defaultType]
+func playerJSONParse(v *VideoInfo, body []byte, res gjson.Result) error {
+	var playerjs = string(body)
+	var detail = res.Get("videoDetails")
+	v.Title = detail.Get("title").String()
+	v.Duration = detail.Get("lengthSeconds").String()
+	v.Author = detail.Get("author").String()
+	var streamingData = res.Get("streamingData")
+	if t := streamingData.Get("dashManifestUrl").String(); t != "" {
+		v.DashURL = t
 	}
-	if v, ok := youtubeImageMap[quality]; ok {
-		qa = v
-	} else {
-		qa = youtubeImageMap[defaultQuality]
+	if t := streamingData.Get("hlsManifestUrl").String(); t != "" {
+		v.HlsURL = t
 	}
-	return fmt.Sprintf("%s%s/%s.%s", host, id, qa, imgtype)
+	var handle = func(key gjson.Result, value gjson.Result) bool {
+		var itag = value.Get("itag").String()
+		var streamType = value.Get("mimeType").String()
+		var quality = value.Get("qualityLabel").String()
+		if quality == "" {
+			quality = value.Get("quality").String()
+		}
+		var contentLength = value.Get("contentLength").String()
+
+		realURL := value.Get("url").String()
+		if realURL == "" {
+			stream, err := url.ParseQuery(value.Get("cipher").String())
+			if err != nil {
+				fmt.Println(err)
+			}
+			realURL, err = getDownloadURL(stream, playerjs)
+			if err != nil {
+				fmt.Println(err)
+			}
+		}
+		v.Streams[itag] = &StreamItem{
+			quality,
+			streamType,
+			realURL,
+			itag,
+			contentLength,
+		}
+		return true
+	}
+	streamingData.Get("formats").ForEach(handle)
+	streamingData.Get("adaptiveFormats").ForEach(handle)
+	return nil
 }
-
-// GetYoutubeVideoURL return video url
-func GetYoutubeVideoURL(id string, videotype string, quality string) (string, error) {
-	info, err := Parse(id)
-	if err != nil {
-		return "", err
-	}
-	return info.MustGetVideoURL(videotype, quality), nil
-}
-
-
-
-**/

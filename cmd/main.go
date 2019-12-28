@@ -3,65 +3,61 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 
-	"github.com/suconghou/youtubeVideoParser"
+	"github.com/suconghou/youtubevideoparser"
 )
 
-func main1() {
-	var id = os.Args[1]
-	if id == "" {
-		id = "awa2Nm8B5_I"
-	}
-	var (
-		parser, err = youtubeVideoParser.NewParser(id)
-	)
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	info, err := parser.Parse()
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	fmt.Println(info)
-	for i, v := range info.Streams {
-		fmt.Println(i, v)
-	}
-}
-
 func main() {
-	var port = 9977
+	if len(os.Args) > 1 {
+		info, err := getInfo(os.Args[1])
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Println(info.Title)
+		for i, v := range info.Streams {
+			fmt.Println(i, v)
+		}
+		return
+	}
 	http.HandleFunc("/video", routeMatch)
-	http.ListenAndServe(fmt.Sprintf("%s:%d", os.Getenv("HOST"), port), nil)
+	log.Fatal(http.ListenAndServe(fmt.Sprintf("%s:%d", os.Getenv("HOST"), 9977), nil))
 }
 
 func routeMatch(w http.ResponseWriter, r *http.Request) {
-	fmt.Println(r.URL)
-	var query = r.URL.Query()
-	var id = query.Get("id")
 	var (
-		parser, err = youtubeVideoParser.NewParser(id)
+		query = r.URL.Query()
+		id    = query.Get("id")
 	)
-	if err != nil {
-		fmt.Println(err)
+	if id == "" {
+		http.Error(w, "error id", http.StatusNotFound)
 		return
 	}
-	info, err := parser.Parse()
+	info, err := getInfo(id)
 	if err != nil {
-		fmt.Println(err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
-	}
-	fmt.Println(info)
-	for i, v := range info.Streams {
-		fmt.Println(i, v)
 	}
 	bs, err := json.Marshal(info)
 	if err != nil {
-		fmt.Println(err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.Write(bs)
+}
+
+func getInfo(id string) (*youtubevideoparser.VideoInfo, error) {
+	var (
+		parser, err = youtubevideoparser.NewParser(id)
+	)
+	if err != nil {
+		return nil, err
+	}
+	info, err := parser.Parse()
+	if err != nil {
+		return nil, err
+	}
+	return info, err
 }
