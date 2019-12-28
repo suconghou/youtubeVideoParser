@@ -70,16 +70,16 @@ func (p *Parser) Parse() (*VideoInfo, error) {
 	if err != nil {
 		return nil, err
 	}
+	if v := args.Get("player_response").String(); v != "" {
+		if err = playerJSONParse(info, body, gjson.Parse(v)); err != nil {
+			return info, err
+		}
+	}
 	if err := fmtStreamMap(info, body, args.Get("url_encoded_fmt_stream_map").String()); err != nil {
 		return info, err
 	}
 	if err := fmtStreamMap(info, body, args.Get("adaptive_fmts").String()); err != nil {
 		return info, err
-	}
-	if v := args.Get("player_response").String(); v != "" {
-		if err = playerJSONParse(info, body, gjson.Parse(v)); err != nil {
-			return info, err
-		}
 	}
 	return info, nil
 }
