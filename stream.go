@@ -6,5 +6,5 @@ type StreamItem struct {
 	Type          string `json:"type"`
 	URL           string `json:"url"`
 	Itag          string `json:"itag"`
-	ContentLength string `json:"contentLength"`
+	ContentLength string `json:"len"`
 }

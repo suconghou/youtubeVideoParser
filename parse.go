@@ -31,8 +31,8 @@ type VideoInfo struct {
 	Title    string                 `json:"title"`
 	Duration string                 `json:"duration"`
 	Author   string                 `json:"author"`
-	DashURL  string                 `json:"dashUrl"`
-	HlsURL   string                 `json:"hlsUrl"`
+	DashURL  string                 `json:"dashUrl,omitempty"`
+	HlsURL   string                 `json:"hlsUrl,omitempty"`
 	Streams  map[string]*StreamItem `json:"streams"`
 }
 
