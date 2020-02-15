@@ -40,17 +40,14 @@ type VideoInfo struct {
 func NewParser(id string) (*Parser, error) {
 	var (
 		videoPageURL = fmt.Sprintf(videoPageHost, id)
-		urls         = []string{
-			videoPageURL,
-		}
 	)
-	response, err := request.GetURLBody(urls)
+	videoPageData, err := request.GetURLData(videoPageURL, false)
 	if err != nil {
 		return nil, err
 	}
 	return &Parser{
 		id,
-		response[videoPageURL],
+		videoPageData,
 	}, nil
 }
 
@@ -66,7 +63,7 @@ func (p *Parser) Parse() (*VideoInfo, error) {
 	res := gjson.ParseBytes(ytplayerConfigMatches[1])
 	args := res.Get("args")
 	playerURL := baseURL + res.Get("assets.js").String()
-	body, err := request.GetURLData(playerURL)
+	body, err := request.GetURLData(playerURL, true)
 	if err != nil {
 		return nil, err
 	}
@@ -119,6 +116,8 @@ func fmtStreamMap(v *VideoInfo, body []byte, urlEncodedFmtStreamMap string) erro
 			url,
 			itag,
 			contentLength,
+			nil,
+			nil,
 		}
 	}
 	return nil
@@ -163,6 +162,14 @@ func playerJSONParse(v *VideoInfo, body []byte, res gjson.Result) error {
 			realURL,
 			itag,
 			contentLength,
+			&rangeItem{
+				value.Get("initRange.start").String(),
+				value.Get("initRange.end").String(),
+			},
+			&rangeItem{
+				value.Get("indexRange.start").String(),
+				value.Get("indexRange.end").String(),
+			},
 		}
 		return true
 	}

@@ -7,14 +7,25 @@ import (
 	"time"
 )
 
+type cacheItem struct {
+	data []byte
+	age  time.Time
+}
+
 type bytecache struct {
 	sync.RWMutex
-	data map[string][]byte
+	data map[string]cacheItem
+	age  time.Duration
 }
 
 var (
-	bytecacher = &bytecache{
-		data: make(map[string][]byte),
+	playercache = &bytecache{
+		data: make(map[string]cacheItem),
+		age:  time.Hour,
+	}
+	pagecache = &bytecache{
+		data: make(map[string]cacheItem),
+		age:  time.Hour * 48,
 	}
 )
 
@@ -34,30 +45,38 @@ func (by *bytecache) get(url string) ([]byte, error) {
 
 func (by *bytecache) cget(key string) []byte {
 	by.RLock()
-	bs := by.data[key]
+	item := by.data[key]
 	by.RUnlock()
-	return bs
+	if item.age.After(time.Now()) {
+		return item.data
+	}
+	by.expire()
+	return nil
 }
 
 func (by *bytecache) set(key string, data []byte) {
 	by.Lock()
-	by.data[key] = data
+	by.data[key] = cacheItem{data, time.Now().Add(by.age)}
+	by.Unlock()
+}
+
+func (by *bytecache) expire() {
+	t := time.Now()
+	by.Lock()
+	for key, item := range by.data {
+		if item.age.Before(t) {
+			delete(by.data, key)
+		}
+	}
 	by.Unlock()
 }
 
 // GetURLData check cache and get from url
-func GetURLData(url string) ([]byte, error) {
-	return bytecacher.get(url)
-}
-
-// Get from memory
-func Get(key string) []byte {
-	return bytecacher.cget(key)
-}
-
-// Set to memory
-func Set(key string, data []byte) {
-	bytecacher.set(key, data)
+func GetURLData(url string, long bool) ([]byte, error) {
+	if long {
+		return playercache.get(url)
+	}
+	return pagecache.get(url)
 }
 
 // GetURLBody run quick get
