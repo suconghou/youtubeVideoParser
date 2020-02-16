@@ -12,6 +12,6 @@ type StreamItem struct {
 }
 
 type rangeItem struct {
-	Start string `json:"start"`
-	End   string `json:"end"`
+	Start string `json:"start,omitempty"`
+	End   string `json:"end,omitempty"`
 }
