@@ -21,11 +21,11 @@ type bytecache struct {
 var (
 	playercache = &bytecache{
 		data: make(map[string]cacheItem),
-		age:  time.Hour,
+		age:  time.Hour * 48,
 	}
 	pagecache = &bytecache{
 		data: make(map[string]cacheItem),
-		age:  time.Hour * 48,
+		age:  time.Hour,
 	}
 )
 
