@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
-	"strings"
 
 	"github.com/suconghou/youtubevideoparser/request"
 	"github.com/tidwall/gjson"
@@ -74,12 +73,6 @@ func (p *Parser) Parse() (*VideoInfo, error) {
 			return info, err
 		}
 	}
-	if err := fmtStreamMap(info, body, args.Get("url_encoded_fmt_stream_map").String()); err != nil {
-		return info, err
-	}
-	if err := fmtStreamMap(info, body, args.Get("adaptive_fmts").String()); err != nil {
-		return info, err
-	}
 	return info, nil
 }
 
@@ -102,48 +95,6 @@ func parse(v *VideoInfo) (*VideoInfo, error) {
 	res := values.Get("player_response")
 	err = playerJSONParse(v, nil, gjson.Parse(res))
 	return v, err
-}
-
-func fmtStreamMap(v *VideoInfo, body []byte, urlEncodedFmtStreamMap string) error {
-	var playerjs = string(body)
-	for _, s := range strings.Split(urlEncodedFmtStreamMap, ",") {
-		if s == "" {
-			return nil
-		}
-		stream, err := url.ParseQuery(s)
-		if err != nil {
-			return err
-		}
-		var itag = stream.Get("itag")
-		var streamType = stream.Get("type")
-		var quality = stream.Get("quality_label")
-		if quality == "" {
-			if v := stream.Get("qualityLabel"); v != "" {
-				quality = v
-			}
-			if quality == "" {
-				quality = stream.Get("quality")
-			}
-		}
-		var contentLength = stream.Get("clen")
-		if contentLength == "" {
-			contentLength = stream.Get("contentLength")
-		}
-		url, err := getDownloadURL(stream, playerjs)
-		if err != nil {
-			return err
-		}
-		v.Streams[itag] = &StreamItem{
-			quality,
-			streamType,
-			url,
-			itag,
-			contentLength,
-			nil,
-			nil,
-		}
-	}
-	return nil
 }
 
 func playerJSONParse(v *VideoInfo, body []byte, res gjson.Result) error {
