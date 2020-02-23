@@ -13,6 +13,7 @@ import (
 const (
 	baseURL       = "https://www.youtube.com"
 	videoPageHost = baseURL + "/watch?v=%s"
+	videoInfoHost = baseURL + "/get_video_info?video_id=%s"
 )
 
 var (
@@ -58,7 +59,8 @@ func (p *Parser) Parse() (*VideoInfo, error) {
 		ytplayerConfigMatches = ytplayerConfigRegexp.FindSubmatch(p.VideoPageData)
 	)
 	if len(ytplayerConfigMatches) < 2 {
-		return info, fmt.Errorf("not found")
+		// if page parse failed, we try api parse again
+		return parse(info)
 	}
 	res := gjson.ParseBytes(ytplayerConfigMatches[1])
 	args := res.Get("args")
@@ -79,6 +81,27 @@ func (p *Parser) Parse() (*VideoInfo, error) {
 		return info, err
 	}
 	return info, nil
+}
+
+func parse(v *VideoInfo) (*VideoInfo, error) {
+	var (
+		videoInfoURL = fmt.Sprintf(videoInfoHost, v.ID)
+	)
+	videoInfoData, err := request.GetURLData(videoInfoURL, false)
+	if err != nil {
+		return v, err
+	}
+	values, err := url.ParseQuery(string(videoInfoData))
+	if err != nil {
+		return v, err
+	}
+	status := values.Get("status")
+	if status != "ok" {
+		return v, fmt.Errorf("%s %s:%s", status, values.Get("errorcode"), values.Get("reason"))
+	}
+	res := values.Get("player_response")
+	err = playerJSONParse(v, nil, gjson.Parse(res))
+	return v, err
 }
 
 func fmtStreamMap(v *VideoInfo, body []byte, urlEncodedFmtStreamMap string) error {
