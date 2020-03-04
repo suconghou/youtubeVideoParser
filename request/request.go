@@ -29,8 +29,8 @@ var (
 	}
 )
 
-func (by *bytecache) get(url string) ([]byte, error) {
-	var bs = by.cget(url)
+func (by *bytecache) geturl(url string) ([]byte, error) {
+	var bs = by.get(url)
 	if bs != nil {
 		return bs, nil
 	}
@@ -43,7 +43,7 @@ func (by *bytecache) get(url string) ([]byte, error) {
 	return bs, nil
 }
 
-func (by *bytecache) cget(key string) []byte {
+func (by *bytecache) get(key string) []byte {
 	by.RLock()
 	item := by.data[key]
 	by.RUnlock()
@@ -71,12 +71,22 @@ func (by *bytecache) expire() {
 	by.Unlock()
 }
 
+// Set cache data
+func Set(key string, data []byte) {
+	playercache.set(key, data)
+}
+
+// Get cache data
+func Get(key string) []byte {
+	return playercache.get(key)
+}
+
 // GetURLData check cache and get from url
 func GetURLData(url string, long bool) ([]byte, error) {
 	if long {
-		return playercache.get(url)
+		return playercache.geturl(url)
 	}
-	return pagecache.get(url)
+	return pagecache.geturl(url)
 }
 
 // GetURLBody run quick get

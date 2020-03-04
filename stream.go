@@ -4,7 +4,7 @@ package youtubevideoparser
 type StreamItem struct {
 	Quality       string     `json:"quality"`
 	Type          string     `json:"type"`
-	URL           string     `json:"url"`
+	URL           string     `json:"url,omitempty"`
 	Itag          string     `json:"itag"`
 	ContentLength string     `json:"len"`
 	InitRange     *rangeItem `json:"initRange"`

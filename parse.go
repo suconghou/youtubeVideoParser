@@ -3,7 +3,6 @@ package youtubevideoparser
 import (
 	"fmt"
 	"net/url"
-	"regexp"
 
 	"github.com/suconghou/youtubevideoparser/request"
 	"github.com/tidwall/gjson"
@@ -11,18 +10,15 @@ import (
 
 const (
 	baseURL       = "https://www.youtube.com"
-	videoPageHost = baseURL + "/watch?v=%s"
+	videoPageHost = baseURL + "/watch?v=%s&spf=prefetch"
 	videoInfoHost = baseURL + "/get_video_info?video_id=%s"
-)
-
-var (
-	ytplayerConfigRegexp = regexp.MustCompile(`;ytplayer.config\s*=\s*({[^\n]+?});ytplayer.load`)
 )
 
 // Parser return instance
 type Parser struct {
-	ID            string
-	VideoPageData []byte
+	ID     string
+	JsPath string
+	Player gjson.Result
 }
 
 // VideoInfo contains video info
@@ -31,8 +27,6 @@ type VideoInfo struct {
 	Title    string                 `json:"title"`
 	Duration string                 `json:"duration"`
 	Author   string                 `json:"author"`
-	DashURL  string                 `json:"dashUrl,omitempty"`
-	HlsURL   string                 `json:"hlsUrl,omitempty"`
 	Streams  map[string]*StreamItem `json:"streams"`
 }
 
@@ -40,100 +34,86 @@ type VideoInfo struct {
 func NewParser(id string) (*Parser, error) {
 	var (
 		videoPageURL = fmt.Sprintf(videoPageHost, id)
+		cachekey     = "jsPath"
 	)
 	videoPageData, err := request.GetURLData(videoPageURL, false)
 	if err != nil {
 		return nil, err
 	}
+	var (
+		jsPath string
+		player gjson.Result
+	)
+	res := gjson.ParseBytes(videoPageData)
+	res.ForEach(func(key gjson.Result, value gjson.Result) bool {
+		if value.Get("title").Exists() && value.Get("data").Exists() {
+			jsPath = value.Get("data.swfcfg.assets.js").String()
+			player = gjson.Parse(value.Get("data.swfcfg.args.player_response").String())
+			request.Set(cachekey, []byte(jsPath))
+			return false
+		}
+		return true
+	})
+	if jsPath == "" {
+		var (
+			videoInfoURL = fmt.Sprintf(videoInfoHost, id)
+		)
+		videoInfoData, err := request.GetURLData(videoInfoURL, false)
+		if err != nil {
+			return nil, err
+		}
+		values, err := url.ParseQuery(string(videoInfoData))
+		if err != nil {
+			return nil, err
+		}
+		status := values.Get("status")
+		if status != "ok" {
+			return nil, fmt.Errorf("%s %s:%s", status, values.Get("errorcode"), values.Get("reason"))
+		}
+		player = gjson.Parse(values.Get("player_response"))
+		jsPath = string(request.Get(cachekey))
+	}
 	return &Parser{
 		id,
-		videoPageData,
+		jsPath,
+		player,
 	}, nil
 }
 
 // Parse parse video info
 func (p *Parser) Parse() (*VideoInfo, error) {
 	var (
-		info                  = &VideoInfo{ID: p.ID, Streams: make(map[string]*StreamItem)}
-		ytplayerConfigMatches = ytplayerConfigRegexp.FindSubmatch(p.VideoPageData)
-	)
-	if len(ytplayerConfigMatches) < 2 {
-		// if page parse failed, we try api parse again
-		return parse(info)
-	}
-	res := gjson.ParseBytes(ytplayerConfigMatches[1])
-	args := res.Get("args")
-	playerURL := baseURL + res.Get("assets.js").String()
-	body, err := request.GetURLData(playerURL, true)
-	if err != nil {
-		return nil, err
-	}
-	if v := args.Get("player_response").String(); v != "" {
-		if err = playerJSONParse(info, body, gjson.Parse(v)); err != nil {
-			return info, err
+		v    = p.Player.Get("videoDetails")
+		info = &VideoInfo{
+			ID:       p.ID,
+			Title:    v.Get("title").String(),
+			Duration: v.Get("lengthSeconds").String(),
+			Author:   v.Get("author").String(),
+			Streams:  make(map[string]*StreamItem),
 		}
-	}
-	return info, nil
-}
-
-func parse(v *VideoInfo) (*VideoInfo, error) {
-	var (
-		videoInfoURL = fmt.Sprintf(videoInfoHost, v.ID)
+		s   = p.Player.Get("streamingData")
+		err error
 	)
-	videoInfoData, err := request.GetURLData(videoInfoURL, false)
-	if err != nil {
-		return v, err
-	}
-	values, err := url.ParseQuery(string(videoInfoData))
-	if err != nil {
-		return v, err
-	}
-	status := values.Get("status")
-	if status != "ok" {
-		return v, fmt.Errorf("%s %s:%s", status, values.Get("errorcode"), values.Get("reason"))
-	}
-	res := values.Get("player_response")
-	err = playerJSONParse(v, nil, gjson.Parse(res))
-	return v, err
-}
-
-func playerJSONParse(v *VideoInfo, body []byte, res gjson.Result) error {
-	var playerjs = string(body)
-	var detail = res.Get("videoDetails")
-	v.Title = detail.Get("title").String()
-	v.Duration = detail.Get("lengthSeconds").String()
-	v.Author = detail.Get("author").String()
-	var streamingData = res.Get("streamingData")
-	if t := streamingData.Get("dashManifestUrl").String(); t != "" {
-		v.DashURL = t
-	}
-	if t := streamingData.Get("hlsManifestUrl").String(); t != "" {
-		v.HlsURL = t
-	}
-	var handle = func(key gjson.Result, value gjson.Result) bool {
-		var itag = value.Get("itag").String()
-		var streamType = value.Get("mimeType").String()
-		var quality = value.Get("qualityLabel").String()
+	var loop = func(key gjson.Result, value gjson.Result) bool {
+		var (
+			url           string
+			itag          = value.Get("itag").String()
+			streamType    = value.Get("mimeType").String()
+			quality       = value.Get("qualityLabel").String()
+			contentLength = value.Get("contentLength").String()
+		)
 		if quality == "" {
 			quality = value.Get("quality").String()
 		}
-		var contentLength = value.Get("contentLength").String()
-
-		realURL := value.Get("url").String()
-		if realURL == "" {
-			stream, err := url.ParseQuery(value.Get("cipher").String())
-			if err != nil {
-				fmt.Println(err)
-			}
-			realURL, err = getDownloadURL(stream, playerjs)
-			if err != nil {
-				fmt.Println(err)
-			}
+		if value.Get("url").Exists() {
+			url = value.Get("url").String()
+		} else if value.Get("cipher").Exists() {
+			url, err = buildURL(value.Get("cipher").String(), p.JsPath)
 		}
-		v.Streams[itag] = &StreamItem{
+		info.Streams[itag] = &StreamItem{
 			quality,
 			streamType,
-			realURL,
+			url,
 			itag,
 			contentLength,
 			&rangeItem{
@@ -147,7 +127,24 @@ func playerJSONParse(v *VideoInfo, body []byte, res gjson.Result) error {
 		}
 		return true
 	}
-	streamingData.Get("formats").ForEach(handle)
-	streamingData.Get("adaptiveFormats").ForEach(handle)
-	return nil
+	s.Get("formats").ForEach(loop)
+	s.Get("adaptiveFormats").ForEach(loop)
+	return info, err
+}
+
+func buildURL(cipher string, jsPath string) (string, error) {
+	var (
+		stream, err = url.ParseQuery(cipher)
+	)
+	if err != nil {
+		return "", err
+	}
+	if jsPath == "" {
+		return "", fmt.Errorf("jsPath not found")
+	}
+	bodystr, err := request.GetURLData(baseURL+jsPath, true)
+	if err != nil {
+		return "", err
+	}
+	return getDownloadURL(stream, string(bodystr))
 }
