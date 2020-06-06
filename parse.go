@@ -109,6 +109,8 @@ func (p *Parser) Parse() (*VideoInfo, error) {
 			url = value.Get("url").String()
 		} else if value.Get("cipher").Exists() {
 			url, err = buildURL(value.Get("cipher").String(), p.JsPath)
+		} else if value.Get("signatureCipher").Exists() {
+			url, err = buildURL(value.Get("signatureCipher").String(), p.JsPath)
 		}
 		info.Streams[itag] = &StreamItem{
 			quality,
