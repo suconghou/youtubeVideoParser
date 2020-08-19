@@ -3,6 +3,7 @@ package youtubevideoparser
 import (
 	"fmt"
 	"net/url"
+	"regexp"
 
 	"github.com/suconghou/youtubevideoparser/request"
 	"github.com/tidwall/gjson"
@@ -10,9 +11,11 @@ import (
 
 const (
 	baseURL       = "https://www.youtube.com"
-	videoPageHost = baseURL + "/watch?v=%s&spf=prefetch"
+	videoPageHost = baseURL + "/watch?v=%s"
 	videoInfoHost = baseURL + "/get_video_info?video_id=%s"
 )
+
+var ytplayerConfigRegexp = regexp.MustCompile(`;ytplayer\.config\s*=\s*({.+?});ytplayer`)
 
 // Parser return instance
 type Parser struct {
@@ -44,16 +47,14 @@ func NewParser(id string) (*Parser, error) {
 		jsPath string
 		player gjson.Result
 	)
-	res := gjson.ParseBytes(videoPageData)
-	res.ForEach(func(key gjson.Result, value gjson.Result) bool {
-		if value.Get("title").Exists() && value.Get("data").Exists() {
-			jsPath = value.Get("data.swfcfg.assets.js").String()
-			player = gjson.Parse(value.Get("data.swfcfg.args.player_response").String())
+	if arr := ytplayerConfigRegexp.FindSubmatch(videoPageData); len(arr) >= 2 {
+		res := gjson.ParseBytes(arr[1])
+		jsPath = res.Get("assets.js").String()
+		player = gjson.Parse(res.Get("args.player_response").String())
+		if jsPath != "" {
 			request.Set(cachekey, []byte(jsPath))
-			return false
 		}
-		return true
-	})
+	}
 	if jsPath == "" {
 		var (
 			videoInfoURL = fmt.Sprintf(videoInfoHost, id)
