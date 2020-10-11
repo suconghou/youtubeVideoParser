@@ -1,6 +1,7 @@
 package request
 
 import (
+	"fmt"
 	"io/ioutil"
 	"net/http"
 	"sync"
@@ -102,6 +103,9 @@ func GetURLBody(urls []string) (map[string][]byte, error) {
 		timeout  = 15
 		client   = &http.Client{Timeout: time.Duration(timeout) * time.Second}
 		response = make(map[string][]byte)
+		headers  = http.Header{
+			"User-Agent": []string{"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/86.0.4240.75 Safari/537.36"},
+		}
 	)
 	for _, u := range urls {
 		go func(url string) {
@@ -114,7 +118,13 @@ func GetURLBody(urls []string) (map[string][]byte, error) {
 				}
 				return
 			}
+			req.Header = headers
 			resp, err := client.Do(req)
+			if err == nil {
+				if resp.StatusCode != http.StatusOK {
+					err = fmt.Errorf("%s:%s", url, resp.Status)
+				}
+			}
 			if err != nil {
 				ch <- &resItem{
 					nil,
