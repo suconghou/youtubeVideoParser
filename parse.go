@@ -2,6 +2,7 @@ package youtubevideoparser
 
 import (
 	"fmt"
+	"net/http"
 	"net/url"
 	"regexp"
 
@@ -22,6 +23,7 @@ type Parser struct {
 	ID     string
 	JsPath string
 	Player gjson.Result
+	client http.Client
 }
 
 // VideoInfo contains video info
@@ -34,12 +36,12 @@ type VideoInfo struct {
 }
 
 // NewParser create Parser instance
-func NewParser(id string) (*Parser, error) {
+func NewParser(id string, client http.Client) (*Parser, error) {
 	var (
 		videoPageURL = fmt.Sprintf(videoPageHost, id)
 		cachekey     = "jsPath"
 	)
-	videoPageData, err := request.GetURLData(videoPageURL, false)
+	videoPageData, err := request.GetURLData(videoPageURL, false, client)
 	if err != nil {
 		return nil, err
 	}
@@ -59,7 +61,7 @@ func NewParser(id string) (*Parser, error) {
 		var (
 			videoInfoURL = fmt.Sprintf(videoInfoHost, id)
 		)
-		videoInfoData, err := request.GetURLData(videoInfoURL, false)
+		videoInfoData, err := request.GetURLData(videoInfoURL, false, client)
 		if err != nil {
 			return nil, err
 		}
@@ -78,6 +80,7 @@ func NewParser(id string) (*Parser, error) {
 		id,
 		jsPath,
 		player,
+		client,
 	}, nil
 }
 
@@ -109,9 +112,9 @@ func (p *Parser) Parse() (*VideoInfo, error) {
 		if value.Get("url").Exists() {
 			url = value.Get("url").String()
 		} else if value.Get("cipher").Exists() {
-			url, err = buildURL(value.Get("cipher").String(), p.JsPath)
+			url, err = p.buildURL(value.Get("cipher").String())
 		} else if value.Get("signatureCipher").Exists() {
-			url, err = buildURL(value.Get("signatureCipher").String(), p.JsPath)
+			url, err = p.buildURL(value.Get("signatureCipher").String())
 		}
 		info.Streams[itag] = &StreamItem{
 			quality,
@@ -135,17 +138,17 @@ func (p *Parser) Parse() (*VideoInfo, error) {
 	return info, err
 }
 
-func buildURL(cipher string, jsPath string) (string, error) {
+func (p *Parser) buildURL(cipher string) (string, error) {
 	var (
 		stream, err = url.ParseQuery(cipher)
 	)
 	if err != nil {
 		return "", err
 	}
-	if jsPath == "" {
+	if p.JsPath == "" {
 		return "", fmt.Errorf("jsPath not found")
 	}
-	bodystr, err := request.GetURLData(baseURL+jsPath, true)
+	bodystr, err := request.GetURLData(baseURL+p.JsPath, true, p.client)
 	if err != nil {
 		return "", err
 	}

@@ -8,6 +8,12 @@ import (
 	"time"
 )
 
+var (
+	headers = http.Header{
+		"User-Agent": []string{"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/86.0.4240.75 Safari/537.36"},
+	}
+)
+
 type cacheItem struct {
 	data []byte
 	age  time.Time
@@ -30,12 +36,12 @@ var (
 	}
 )
 
-func (by *bytecache) geturl(url string) ([]byte, error) {
+func (by *bytecache) geturl(url string, client http.Client) ([]byte, error) {
 	var bs = by.get(url)
 	if bs != nil {
 		return bs, nil
 	}
-	res, err := GetURLBody([]string{url})
+	res, err := GetURLBody([]string{url}, client)
 	if err != nil {
 		return nil, err
 	}
@@ -83,15 +89,15 @@ func Get(key string) []byte {
 }
 
 // GetURLData check cache and get from url
-func GetURLData(url string, long bool) ([]byte, error) {
+func GetURLData(url string, long bool, client http.Client) ([]byte, error) {
 	if long {
-		return playercache.geturl(url)
+		return playercache.geturl(url, client)
 	}
-	return pagecache.geturl(url)
+	return pagecache.geturl(url, client)
 }
 
 // GetURLBody run quick get
-func GetURLBody(urls []string) (map[string][]byte, error) {
+func GetURLBody(urls []string, client http.Client) (map[string][]byte, error) {
 	type resItem struct {
 		bytes []byte
 		url   string
@@ -99,17 +105,11 @@ func GetURLBody(urls []string) (map[string][]byte, error) {
 	}
 	var (
 		ch       = make(chan *resItem)
-		method   = http.MethodGet
-		timeout  = 15
-		client   = &http.Client{Timeout: time.Duration(timeout) * time.Second}
 		response = make(map[string][]byte)
-		headers  = http.Header{
-			"User-Agent": []string{"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/86.0.4240.75 Safari/537.36"},
-		}
 	)
 	for _, u := range urls {
 		go func(url string) {
-			req, err := http.NewRequest(method, url, nil)
+			req, err := http.NewRequest(http.MethodGet, url, nil)
 			if err != nil {
 				ch <- &resItem{
 					nil,

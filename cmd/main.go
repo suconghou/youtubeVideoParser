@@ -6,9 +6,12 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/suconghou/youtubevideoparser"
 )
+
+var client = http.Client{Timeout: 15 * time.Second}
 
 func main() {
 	if len(os.Args) > 1 {
@@ -50,7 +53,7 @@ func routeMatch(w http.ResponseWriter, r *http.Request) {
 
 func getInfo(id string) (*youtubevideoparser.VideoInfo, error) {
 	var (
-		parser, err = youtubevideoparser.NewParser(id)
+		parser, err = youtubevideoparser.NewParser(id, client)
 	)
 	if err != nil {
 		return nil, err
