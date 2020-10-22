@@ -75,6 +75,19 @@ func NewParser(id string, client http.Client) (*Parser, error) {
 		}
 		player = gjson.Parse(values.Get("player_response"))
 		jsPath = string(request.Get(cachekey))
+		ps := player.Get("playabilityStatus")
+		s := ps.Get("status").String()
+		if s == "UNPLAYABLE" || s == "LOGIN_REQUIRED" || s == "ERROR" {
+			reason := ps.Get("reason").String()
+			subreason := ps.Get("errorScreen.playerErrorMessageRenderer.subreason.simpleText").String()
+			if reason == "" {
+				reason = s
+			}
+			if subreason != "" {
+				reason += " " + subreason
+			}
+			return nil, fmt.Errorf(reason)
+		}
 	}
 	return &Parser{
 		id,
