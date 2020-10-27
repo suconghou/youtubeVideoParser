@@ -16,7 +16,10 @@ const (
 	videoInfoHost = baseURL + "/get_video_info?video_id=%s"
 )
 
-var ytplayerConfigRegexp = regexp.MustCompile(`;ytplayer\.config\s*=\s*({.+?});ytplayer`)
+var (
+	ytplayerConfigRegexp = regexp.MustCompile(`;ytplayer\.config\s*=\s*({.+?});ytplayer`)
+	jsPathRegexp         = regexp.MustCompile(`"jsUrl":"(/s/player.*?base.js)"`)
+)
 
 // Parser return instance
 type Parser struct {
@@ -40,24 +43,30 @@ func NewParser(id string, client http.Client) (*Parser, error) {
 	var (
 		videoPageURL = fmt.Sprintf(videoPageHost, id)
 		cachekey     = "jsPath"
+		jsPath       string
+		player       gjson.Result
+		ok           = false
 	)
 	videoPageData, err := request.GetURLData(videoPageURL, false, client)
-	if err != nil {
-		return nil, err
-	}
-	var (
-		jsPath string
-		player gjson.Result
-	)
-	if arr := ytplayerConfigRegexp.FindSubmatch(videoPageData); len(arr) >= 2 {
-		res := gjson.ParseBytes(arr[1])
-		jsPath = res.Get("assets.js").String()
-		player = gjson.Parse(res.Get("args.player_response").String())
-		if jsPath != "" {
-			request.Set(cachekey, []byte(jsPath))
+	if err == nil {
+		if arr := jsPathRegexp.FindSubmatch(videoPageData); len(arr) >= 2 {
+			jsPath = string(arr[1])
+		}
+		if arr := ytplayerConfigRegexp.FindSubmatch(videoPageData); len(arr) >= 2 {
+			res := gjson.ParseBytes(arr[1])
+			if jp := res.Get("assets.js").String(); jsPath == "" && jp != "" {
+				jsPath = jp
+			}
+			player = gjson.Parse(res.Get("args.player_response").String())
+			if player.Get("videoDetails").Exists() && player.Get("streamingData").Exists() {
+				ok = true
+			}
 		}
 	}
-	if jsPath == "" {
+	if jsPath != "" {
+		request.Set(cachekey, []byte(jsPath))
+	}
+	if !ok {
 		var (
 			videoInfoURL = fmt.Sprintf(videoInfoHost, id)
 		)
