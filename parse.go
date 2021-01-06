@@ -19,6 +19,7 @@ const (
 var (
 	ytplayerConfigRegexp = regexp.MustCompile(`;ytplayer\.config\s*=\s*({.+?});ytplayer`)
 	jsPathRegexp         = regexp.MustCompile(`"jsUrl":"(/s/player.*?base.js)"`)
+	initPlayerRegexp     = regexp.MustCompile(`ytInitialPlayerResponse\s+=\s+(.*\]});.*?var`)
 )
 
 // Parser return instance
@@ -59,6 +60,12 @@ func NewParser(id string, client http.Client) (*Parser, error) {
 			}
 			player = gjson.Parse(res.Get("args.player_response").String())
 			if player.Get("videoDetails").Exists() && player.Get("streamingData").Exists() {
+				ok = true
+			}
+		} else if arr := initPlayerRegexp.FindSubmatch(videoPageData); len(arr) >= 2 {
+			player = gjson.ParseBytes(arr[1])
+			status := player.Get("playabilityStatus.status").String()
+			if status == "OK" && player.Get("videoDetails").Exists() && player.Get("streamingData").Exists() {
 				ok = true
 			}
 		}
