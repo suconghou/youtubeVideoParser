@@ -95,7 +95,7 @@ func NewParser(id string, client http.Client) (*Parser, error) {
 		s := ps.Get("status").String()
 		if s == "UNPLAYABLE" || s == "LOGIN_REQUIRED" || s == "ERROR" {
 			reason := ps.Get("reason").String()
-			subreason := ps.Get("errorScreen.playerErrorMessageRenderer.subreason.simpleText").String()
+			subreason := ps.Get("errorScreen.playerErrorMessageRenderer.subreason.runs.0.text").String()
 			if reason == "" {
 				reason = s
 			}
