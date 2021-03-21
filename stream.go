@@ -15,3 +15,9 @@ type rangeItem struct {
 	Start string `json:"start,omitempty"`
 	End   string `json:"end,omitempty"`
 }
+
+type Caption struct {
+	URL          string `json:"url"`
+	LanguageCode string `json:"languageCode"`
+	Language     string `json:"language"`
+}

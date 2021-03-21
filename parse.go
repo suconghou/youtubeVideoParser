@@ -36,6 +36,7 @@ type VideoInfo struct {
 	Title    string                 `json:"title"`
 	Duration string                 `json:"duration"`
 	Author   string                 `json:"author"`
+	Captions []*Caption             `json:"captions"`
 	Streams  map[string]*StreamItem `json:"streams"`
 }
 
@@ -122,6 +123,7 @@ func (p *Parser) Parse() (*VideoInfo, error) {
 			Title:    v.Get("title").String(),
 			Duration: v.Get("lengthSeconds").String(),
 			Author:   v.Get("author").String(),
+			Captions: parseCaptions(p.Player),
 			Streams:  make(map[string]*StreamItem),
 		}
 		s   = p.Player.Get("streamingData")
@@ -182,4 +184,18 @@ func (p *Parser) buildURL(cipher string) (string, error) {
 		return "", err
 	}
 	return getDownloadURL(stream, string(bodystr))
+}
+
+func parseCaptions(player gjson.Result) []*Caption {
+	var captions = []*Caption{}
+	var loop = func(key gjson.Result, value gjson.Result) bool {
+		captions = append(captions, &Caption{
+			URL:          value.Get("baseUrl").String(),
+			Language:     value.Get("name.simpleText").String(),
+			LanguageCode: value.Get("languageCode").String(),
+		})
+		return true
+	}
+	player.Get("captions.playerCaptionsTracklistRenderer.captionTracks").ForEach(loop)
+	return captions
 }
