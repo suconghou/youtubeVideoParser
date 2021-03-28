@@ -36,7 +36,7 @@ type VideoInfo struct {
 	Title    string                 `json:"title"`
 	Duration string                 `json:"duration"`
 	Author   string                 `json:"author"`
-	Captions []*Caption             `json:"captions"`
+	Captions []*Caption             `json:"captions,omitempty"`
 	Streams  map[string]*StreamItem `json:"streams"`
 }
 
