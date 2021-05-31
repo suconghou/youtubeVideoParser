@@ -2,7 +2,7 @@ package request
 
 import (
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"sync"
 	"time"
@@ -135,7 +135,7 @@ func GetURLBody(urls []string, client http.Client) (map[string][]byte, error) {
 				return
 			}
 			defer resp.Body.Close()
-			bytes, err := ioutil.ReadAll(resp.Body)
+			bytes, err := io.ReadAll(resp.Body)
 			ch <- &resItem{
 				bytes,
 				url,
