@@ -17,7 +17,7 @@ type rangeItem struct {
 }
 
 type Caption struct {
-	URL          string `json:"url"`
+	URL          string `json:"url,omitempty"`
 	LanguageCode string `json:"languageCode"`
 	Language     string `json:"language"`
 }
