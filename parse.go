@@ -13,7 +13,7 @@ import (
 const (
 	baseURL       = "https://www.youtube.com"
 	videoPageHost = baseURL + "/watch?v=%s"
-	videoInfoHost = baseURL + "/get_video_info?video_id=%s"
+	videoInfoHost = baseURL + "/get_video_info?video_id=%s&html5=1"
 )
 
 var (
