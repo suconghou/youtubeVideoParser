@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sync"
+	"time"
 
 	"github.com/suconghou/youtubevideoparser/request"
 	"github.com/tidwall/gjson"
@@ -19,6 +21,7 @@ var (
 	jsPathRegexp     = regexp.MustCompile(`"jsUrl":"(/s/player.*?base.js)"`)
 	initPlayerRegexp = regexp.MustCompile(`ytInitialPlayerResponse\s+=\s+(.*}+);\s*var`)
 	jsPath           string
+	caches           = sync.Map{}
 )
 
 // Parser return instance
@@ -38,7 +41,39 @@ type VideoInfo struct {
 	Streams  map[string]*StreamItem `json:"streams"`
 }
 
-// NewParser create Parser instance
+type cacheInfo struct {
+	data *VideoInfo
+	time time.Time
+}
+
+// 包含一层缓存包装
+func Parse(id string, client http.Client) (*VideoInfo, error) {
+	var now = time.Now()
+	caches.Range(func(key, value interface{}) bool {
+		var v = value.(*cacheInfo)
+		if now.Sub(v.time) > time.Hour {
+			caches.Delete(key)
+		}
+		return true
+	})
+	if v, ok := caches.Load(id); ok {
+		return v.(*cacheInfo).data, nil
+	}
+	parser, err := NewParser(id, client)
+	if err != nil {
+		return nil, err
+	}
+	info, err := parser.Parse()
+	if err == nil {
+		caches.Store(id, &cacheInfo{
+			info,
+			now,
+		})
+	}
+	return info, err
+}
+
+// NewParser仅包含http请求缓存,若要完全的缓存请使用Parse()
 func NewParser(id string, client http.Client) (*Parser, error) {
 	var (
 		videoPageURL = fmt.Sprintf(videoPageHost, id)
@@ -157,14 +192,9 @@ func (p *Parser) Parse() (*VideoInfo, error) {
 func parseCaptions(player gjson.Result) []*Caption {
 	var captions = []*Caption{}
 	var loop = func(key gjson.Result, value gjson.Result) bool {
-		var l = value.Get("name.simpleText").String()
-		if l == "" {
-			l = value.Get("name.runs[0].text").String()
-		}
 		captions = append(captions, &Caption{
-			URL:          value.Get("baseUrl").String(),
-			Language:     value.Get("name.simpleText").String(),
-			LanguageCode: value.Get("languageCode").String(),
+			URL:      value.Get("baseUrl").String(),
+			Language: value.Get("languageCode").String(),
 		})
 		return true
 	}
