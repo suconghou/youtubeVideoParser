@@ -1,154 +1,148 @@
 package request
 
 import (
+	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
 
 var (
 	headers = http.Header{
-		"User-Agent":      []string{"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/86.0.4240.75 Safari/537.36"},
+		"User-Agent":      []string{"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/94.0.4606.81 Safari/537.36"},
 		"Accept-Language": []string{"zh-CN,zh;q=0.9,en;q=0.8"},
 	}
+
+	headers_ = http.Header{
+		"User-Agent":      []string{"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/94.0.4606.81 Safari/537.36"},
+		"Accept-Language": []string{"zh-CN,zh;q=0.9,en;q=0.8"},
+		"Content-Type":    []string{"application/json"},
+	}
+
+	bufferPool = sync.Pool{
+		New: func() interface{} {
+			return bytes.NewBuffer(make([]byte, 32*1024))
+		},
+	}
+
+	errTimeout = errors.New("timeout")
+
+	httpProvider          = NewLockGeter(time.Hour * 2)
+	httpProviderLongCache = NewLockGeter(time.Hour * 48)
 )
+
+const api = "https://youtubei.googleapis.com/youtubei/v1/player?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8"
+
+// LockGeter for http cache & lock get
+type LockGeter struct {
+	time   time.Time
+	cache  time.Duration
+	caches sync.Map
+}
 
 type cacheItem struct {
-	data []byte
-	age  time.Time
+	time   time.Time
+	ctx    context.Context
+	cancel context.CancelFunc
+	data   *bytes.Buffer
+	err    error
 }
 
-type bytecache struct {
-	sync.RWMutex
-	data map[string]cacheItem
-	age  time.Duration
+// NewLockGeter create new lockgeter
+func NewLockGeter(cache time.Duration) *LockGeter {
+	return &LockGeter{
+		time:   time.Now(),
+		cache:  cache,
+		caches: sync.Map{},
+	}
 }
 
-var (
-	playercache = &bytecache{
-		data: make(map[string]cacheItem),
-		age:  time.Hour * 48,
+// Get with lock & cache,the return bytes is readonly
+func (l *LockGeter) DoRequest(url string, method string, reqHeaders http.Header, body io.Reader, cackeKey string, client http.Client) ([]byte, error) {
+	var now = time.Now()
+	l.clean(now)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	t, loaded := l.caches.LoadOrStore(cackeKey, &cacheItem{
+		time:   now,
+		ctx:    ctx,
+		cancel: cancel,
+		err:    errTimeout,
+	})
+	v := t.(*cacheItem)
+	if loaded {
+		<-v.ctx.Done()
+		if v.data == nil {
+			return nil, v.err
+		}
+		return v.data.Bytes(), v.err
 	}
-	pagecache = &bytecache{
-		data: make(map[string]cacheItem),
-		age:  time.Hour,
+	data, err := DoRequest(url, method, reqHeaders, body, client)
+	v.data = data
+	v.err = err
+	cancel()
+	if data == nil {
+		return nil, err
 	}
-)
+	return data.Bytes(), err
+}
 
-func (by *bytecache) geturl(url string, client http.Client) ([]byte, error) {
-	var bs = by.get(url)
-	if bs != nil {
-		return bs, nil
+func (l *LockGeter) clean(now time.Time) {
+	if now.Sub(l.time) < time.Second*5 {
+		return
 	}
-	res, err := GetURLBody([]string{url}, client)
+	l.caches.Range(func(key, value interface{}) bool {
+		var v = value.(*cacheItem)
+		if now.Sub(v.time) > l.cache {
+			v.cancel()
+			if v.data != nil {
+				bufferPool.Put(v.data)
+			}
+			l.caches.Delete(key)
+		}
+		return true
+	})
+	l.time = now
+}
+
+// LockGeter的调用都有bufferPool.Put,外部调用即时没有bufferPool.Put也不会内存泄露
+func DoRequest(url string, method string, reqHeaders http.Header, body io.Reader, client http.Client) (*bytes.Buffer, error) {
+	req, err := http.NewRequest(method, url, body)
 	if err != nil {
 		return nil, err
 	}
-	bs = res[url]
-	by.set(url, bs)
-	return bs, nil
-}
-
-func (by *bytecache) get(key string) []byte {
-	by.RLock()
-	item := by.data[key]
-	by.RUnlock()
-	if item.age.After(time.Now()) {
-		return item.data
+	req.Header = reqHeaders
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
 	}
-	by.expire()
-	return nil
-}
-
-func (by *bytecache) set(key string, data []byte) {
-	by.Lock()
-	by.data[key] = cacheItem{data, time.Now().Add(by.age)}
-	by.Unlock()
-}
-
-func (by *bytecache) expire() {
-	t := time.Now()
-	by.Lock()
-	for key, item := range by.data {
-		if item.age.Before(t) {
-			delete(by.data, key)
-		}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("%s:%s", url, resp.Status)
 	}
-	by.Unlock()
+	var buffer = bufferPool.Get().(*bytes.Buffer)
+	buffer.Reset()
+	_, err = buffer.ReadFrom(resp.Body)
+	if err != nil {
+		bufferPool.Put(buffer)
+		return nil, err
+	}
+	return buffer, nil
 }
 
-// Set cache data
-func Set(key string, data []byte) {
-	playercache.set(key, data)
+func CacheGet(url string, client http.Client) ([]byte, error) {
+	return httpProvider.DoRequest(url, http.MethodGet, headers, nil, url, client)
 }
 
-// Get cache data
-func Get(key string) []byte {
-	return playercache.get(key)
+func CacheGetLong(url string, client http.Client) ([]byte, error) {
+	return httpProviderLongCache.DoRequest(url, http.MethodGet, headers, nil, url, client)
 }
 
-// GetURLData check cache and get from url
-func GetURLData(url string, long bool, client http.Client) ([]byte, error) {
-	if long {
-		return playercache.geturl(url, client)
-	}
-	return pagecache.geturl(url, client)
-}
-
-// GetURLBody run quick get
-func GetURLBody(urls []string, client http.Client) (map[string][]byte, error) {
-	type resItem struct {
-		bytes []byte
-		url   string
-		err   error
-	}
-	var (
-		ch       = make(chan *resItem)
-		response = make(map[string][]byte)
-	)
-	for _, u := range urls {
-		go func(url string) {
-			req, err := http.NewRequest(http.MethodGet, url, nil)
-			if err != nil {
-				ch <- &resItem{
-					nil,
-					url,
-					err,
-				}
-				return
-			}
-			req.Header = headers
-			resp, err := client.Do(req)
-			if err == nil {
-				if resp.StatusCode != http.StatusOK {
-					err = fmt.Errorf("%s:%s", url, resp.Status)
-				}
-			}
-			if err != nil {
-				ch <- &resItem{
-					nil,
-					url,
-					err,
-				}
-				return
-			}
-			defer resp.Body.Close()
-			bytes, err := io.ReadAll(resp.Body)
-			ch <- &resItem{
-				bytes,
-				url,
-				err,
-			}
-		}(u)
-	}
-	for range urls {
-		item := <-ch
-		if item.err != nil {
-			return response, item.err
-		}
-		response[item.url] = item.bytes
-	}
-	return response, nil
+func CachePost(id string, client http.Client) ([]byte, error) {
+	var body = strings.NewReader(`{"videoId":"` + id + `","context":{"client":{"hl":"cn","gl":"US","clientName":"ANDROID","clientVersion":"16.02"}}}`)
+	return httpProvider.DoRequest(api, http.MethodPost, headers_, body, id, client)
 }

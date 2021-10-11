@@ -13,18 +13,17 @@ import (
 const (
 	baseURL       = "https://www.youtube.com"
 	videoPageHost = baseURL + "/watch?v=%s"
-	videoInfoHost = baseURL + "/get_video_info?video_id=%s&html5=1"
 )
 
 var (
 	jsPathRegexp     = regexp.MustCompile(`"jsUrl":"(/s/player.*?base.js)"`)
 	initPlayerRegexp = regexp.MustCompile(`ytInitialPlayerResponse\s+=\s+(.*}+);\s*var`)
+	jsPath           string
 )
 
 // Parser return instance
 type Parser struct {
 	ID     string
-	JsPath string
 	Player gjson.Result
 	client http.Client
 }
@@ -43,62 +42,37 @@ type VideoInfo struct {
 func NewParser(id string, client http.Client) (*Parser, error) {
 	var (
 		videoPageURL = fmt.Sprintf(videoPageHost, id)
-		cachekey     = "jsPath"
-		jsPath       string
 		player       gjson.Result
 		ok           = false
 	)
-	videoPageData, err := request.GetURLData(videoPageURL, false, client)
-	if err == nil {
+	if bs, err := request.CachePost(id, client); err == nil {
+		player = gjson.ParseBytes(bs)
+		if player.Get("playabilityStatus.status").String() == "OK" && player.Get("videoDetails").Exists() && player.Get("streamingData").Exists() {
+			ok = true
+		}
+	}
+	if !ok {
+		videoPageData, err := request.CacheGet(videoPageURL, client)
+		if err != nil {
+			return nil, err
+		}
 		if arr := jsPathRegexp.FindSubmatch(videoPageData); len(arr) >= 2 {
 			jsPath = string(arr[1])
 		}
 		if arr := initPlayerRegexp.FindSubmatch(videoPageData); len(arr) >= 2 {
 			player = gjson.ParseBytes(arr[1])
 			status := player.Get("playabilityStatus.status").String()
-			if status == "OK" && player.Get("videoDetails").Exists() && player.Get("streamingData").Exists() {
-				ok = true
+			if status != "OK" || !player.Get("videoDetails").Exists() || !player.Get("streamingData").Exists() {
+				ps := player.Get("playabilityStatus")
+				reason := ps.Get("reason").String()
+				return nil, fmt.Errorf("%s %s %s", id, status, reason)
 			}
-		}
-	}
-	if jsPath != "" {
-		request.Set(cachekey, []byte(jsPath))
-	}
-	if !ok {
-		var (
-			videoInfoURL = fmt.Sprintf(videoInfoHost, id)
-		)
-		videoInfoData, err := request.GetURLData(videoInfoURL, false, client)
-		if err != nil {
-			return nil, err
-		}
-		values, err := url.ParseQuery(string(videoInfoData))
-		if err != nil {
-			return nil, err
-		}
-		status := values.Get("status")
-		if status != "ok" {
-			return nil, fmt.Errorf("%s %s:%s", status, values.Get("errorcode"), values.Get("reason"))
-		}
-		player = gjson.Parse(values.Get("player_response"))
-		jsPath = string(request.Get(cachekey))
-		ps := player.Get("playabilityStatus")
-		s := ps.Get("status").String()
-		if s == "UNPLAYABLE" || s == "LOGIN_REQUIRED" || s == "ERROR" {
-			reason := ps.Get("reason").String()
-			subreason := ps.Get("errorScreen.playerErrorMessageRenderer.subreason.runs.0.text").String()
-			if reason == "" {
-				reason = s
-			}
-			if subreason != "" {
-				reason += " " + subreason
-			}
-			return nil, fmt.Errorf(reason)
+		} else {
+			return nil, fmt.Errorf("%s failed to get ytInitialPlayerResponse", id)
 		}
 	}
 	return &Parser{
 		id,
-		jsPath,
 		player,
 		client,
 	}, nil
@@ -116,9 +90,27 @@ func (p *Parser) Parse() (*VideoInfo, error) {
 			Captions: parseCaptions(p.Player),
 			Streams:  make(map[string]*StreamItem),
 		}
-		s   = p.Player.Get("streamingData")
-		err error
+		s          = p.Player.Get("streamingData")
+		err        error
+		cipherBody string
 	)
+	var buildURL = func(cipher string) (string, error) {
+		stream, err := url.ParseQuery(cipher)
+		if err != nil {
+			return "", err
+		}
+		if cipherBody == "" {
+			if jsPath == "" {
+				return "", fmt.Errorf("jsPath not found")
+			}
+			bs, err := request.CacheGetLong(baseURL+jsPath, p.client)
+			if err != nil {
+				return "", err
+			}
+			cipherBody = string(bs)
+		}
+		return getDownloadURL(stream, cipherBody)
+	}
 	var loop = func(key gjson.Result, value gjson.Result) bool {
 		var (
 			url           string
@@ -133,9 +125,9 @@ func (p *Parser) Parse() (*VideoInfo, error) {
 		if value.Get("url").Exists() {
 			url = value.Get("url").String()
 		} else if value.Get("cipher").Exists() {
-			url, err = p.buildURL(value.Get("cipher").String())
+			url, err = buildURL(value.Get("cipher").String())
 		} else if value.Get("signatureCipher").Exists() {
-			url, err = p.buildURL(value.Get("signatureCipher").String())
+			url, err = buildURL(value.Get("signatureCipher").String())
 		}
 		info.Streams[itag] = &StreamItem{
 			quality,
@@ -152,6 +144,9 @@ func (p *Parser) Parse() (*VideoInfo, error) {
 				value.Get("indexRange.end").String(),
 			},
 		}
+		if err != nil {
+			return false
+		}
 		return true
 	}
 	s.Get("formats").ForEach(loop)
@@ -159,26 +154,13 @@ func (p *Parser) Parse() (*VideoInfo, error) {
 	return info, err
 }
 
-func (p *Parser) buildURL(cipher string) (string, error) {
-	var (
-		stream, err = url.ParseQuery(cipher)
-	)
-	if err != nil {
-		return "", err
-	}
-	if p.JsPath == "" {
-		return "", fmt.Errorf("jsPath not found")
-	}
-	bodystr, err := request.GetURLData(baseURL+p.JsPath, true, p.client)
-	if err != nil {
-		return "", err
-	}
-	return getDownloadURL(stream, string(bodystr))
-}
-
 func parseCaptions(player gjson.Result) []*Caption {
 	var captions = []*Caption{}
 	var loop = func(key gjson.Result, value gjson.Result) bool {
+		var l = value.Get("name.simpleText").String()
+		if l == "" {
+			l = value.Get("name.runs[0].text").String()
+		}
 		captions = append(captions, &Caption{
 			URL:          value.Get("baseUrl").String(),
 			Language:     value.Get("name.simpleText").String(),
