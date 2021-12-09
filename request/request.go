@@ -100,6 +100,7 @@ func (l *LockGeter) clean(now time.Time) {
 		if now.Sub(v.time) > l.cache {
 			v.cancel()
 			if v.data != nil {
+				v.data.Reset()
 				bufferPool.Put(v.data)
 			}
 			l.caches.Delete(key)
@@ -128,6 +129,7 @@ func DoRequest(url string, method string, reqHeaders http.Header, body io.Reader
 	buffer.Reset()
 	_, err = buffer.ReadFrom(resp.Body)
 	if err != nil {
+		buffer.Reset()
 		bufferPool.Put(buffer)
 		return nil, err
 	}
