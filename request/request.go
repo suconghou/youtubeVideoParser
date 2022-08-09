@@ -32,50 +32,50 @@ var (
 
 	errTimeout = errors.New("timeout")
 
-	httpProvider          = NewLockGeter(time.Hour * 2)
-	httpProviderLongCache = NewLockGeter(time.Hour * 48)
+	HttpProvider = NewLockGeter()
 )
 
 const api = "https://youtubei.googleapis.com/youtubei/v1/player?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8"
 
 // LockGeter for http cache & lock get
 type LockGeter struct {
-	time   time.Time
-	cache  time.Duration
+	time   int64
 	caches sync.Map
 }
 
 type cacheItem struct {
-	time   time.Time
-	ctx    context.Context
-	cancel context.CancelFunc
-	data   *bytes.Buffer
-	err    error
+	time    int64
+	ctx     context.Context
+	cancel  context.CancelFunc
+	data    *bytes.Buffer
+	err     error
+	loading bool
 }
 
 // NewLockGeter create new lockgeter
-func NewLockGeter(cache time.Duration) *LockGeter {
+func NewLockGeter() *LockGeter {
 	return &LockGeter{
-		time:   time.Now(),
-		cache:  cache,
+		time:   0,
 		caches: sync.Map{},
 	}
 }
 
 // Get with lock & cache,the return bytes is readonly
-func (l *LockGeter) DoRequest(url string, method string, reqHeaders http.Header, body io.Reader, cackeKey string, client http.Client) ([]byte, error) {
-	var now = time.Now()
+func (l *LockGeter) DoRequest(url string, method string, reqHeaders http.Header, body io.Reader, cackeKey string, client http.Client, ttl int64) ([]byte, error) {
+	var now = time.Now().Unix()
 	l.clean(now)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	t, loaded := l.caches.LoadOrStore(cackeKey, &cacheItem{
-		time:   now,
-		ctx:    ctx,
-		cancel: cancel,
-		err:    errTimeout,
+		time:    now + ttl,
+		ctx:     ctx,
+		cancel:  cancel,
+		err:     errTimeout,
+		loading: true,
 	})
 	v := t.(*cacheItem)
 	if loaded {
 		<-v.ctx.Done()
+		v.loading = false
 		if v.data == nil {
 			return nil, v.err
 		}
@@ -84,6 +84,7 @@ func (l *LockGeter) DoRequest(url string, method string, reqHeaders http.Header,
 	data, err := DoRequest(url, method, reqHeaders, body, client)
 	v.data = data
 	v.err = err
+	v.loading = false
 	cancel()
 	if data == nil {
 		return nil, err
@@ -91,14 +92,14 @@ func (l *LockGeter) DoRequest(url string, method string, reqHeaders http.Header,
 	return data.Bytes(), err
 }
 
-func (l *LockGeter) clean(now time.Time) {
-	if now.Sub(l.time) < time.Second*5 {
+func (l *LockGeter) clean(now int64) {
+	if now-l.time < 5 {
 		return
 	}
 	l.time = now
 	l.caches.Range(func(key, value interface{}) bool {
 		var v = value.(*cacheItem)
-		if now.Sub(v.time) > l.cache {
+		if v.time < now && !v.loading {
 			v.cancel()
 			if v.data != nil {
 				v.data.Reset()
@@ -137,14 +138,14 @@ func DoRequest(url string, method string, reqHeaders http.Header, body io.Reader
 }
 
 func CacheGet(url string, client http.Client) ([]byte, error) {
-	return httpProvider.DoRequest(url, http.MethodGet, headers, nil, url, client)
+	return HttpProvider.DoRequest(url, http.MethodGet, headers, nil, url, client, 7200)
 }
 
 func CacheGetLong(url string, client http.Client) ([]byte, error) {
-	return httpProviderLongCache.DoRequest(url, http.MethodGet, headers, nil, url, client)
+	return HttpProvider.DoRequest(url, http.MethodGet, headers, nil, url, client, 86400)
 }
 
 func CachePost(id string, client http.Client) ([]byte, error) {
 	var body = strings.NewReader(`{"videoId":"` + id + `","context":{"client":{"clientName":"Android","clientVersion":"16.13.35"}}}`)
-	return httpProvider.DoRequest(api, http.MethodPost, headers_, body, id, client)
+	return HttpProvider.DoRequest(api, http.MethodPost, headers_, body, id, client, 7200)
 }
