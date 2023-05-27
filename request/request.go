@@ -19,7 +19,7 @@ var (
 	}
 
 	headers_ = http.Header{
-		"User-Agent":      []string{"com.google.android.youtube/17.31.35 (Linux; U; Android 11) gzip"},
+		"User-Agent":      []string{"com.google.ios.youtube/17.33.2 (iPhone14,3; U; CPU iOS 15_6 like Mac OS X)"},
 		"Accept-Language": []string{"zh-CN,zh;q=0.9,en;q=0.8"},
 		"Content-Type":    []string{"application/json"},
 	}
@@ -35,7 +35,7 @@ var (
 	HttpProvider = NewLockGeter()
 )
 
-const api = "https://youtubei.googleapis.com/youtubei/v1/player?key=AIzaSyCjc_pVEDi4qsv5MtC2dMXzpIaDoRFLsxw"
+const api = "https://youtubei.googleapis.com/youtubei/v1/player?key=AIzaSyB-63vPrdThhKuerbB2N_l7Kwwcxj6yUAc"
 
 // LockGeter for http cache & lock get
 type LockGeter struct {
@@ -146,6 +146,6 @@ func CacheGetLong(url string, client http.Client) ([]byte, error) {
 }
 
 func CachePost(id string, client http.Client) ([]byte, error) {
-	var body = strings.NewReader(`{"videoId":"` + id + `","context":{"client":{"clientName":"ANDROID_EMBEDDED_PLAYER","clientVersion":"17.31.35","androidSdkVersion":30}}}`)
+	var body = strings.NewReader(`{"videoId":"` + id + `","context":{"client":{"clientName":"IOS","clientVersion":"17.33.2","deviceModel":"iPhone14,3"}}}`)
 	return HttpProvider.DoRequest(api, http.MethodPost, headers_, body, id, client, 7200)
 }
