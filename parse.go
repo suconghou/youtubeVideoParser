@@ -179,10 +179,7 @@ func (p *Parser) Parse() (*VideoInfo, error) {
 				value.Get("indexRange.end").String(),
 			},
 		}
-		if err != nil {
-			return false
-		}
-		return true
+		return err == nil
 	}
 	s.Get("formats").ForEach(loop)
 	s.Get("adaptiveFormats").ForEach(loop)
