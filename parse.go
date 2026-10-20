@@ -17,9 +17,7 @@ const (
 )
 
 var (
-	jsPathRegexp     = regexp.MustCompile(`"jsUrl":"(/s/player.*?base.js)"`)
 	initPlayerRegexp = regexp.MustCompile(`ytInitialPlayerResponse\s+=\s+(.*}+);\s*var`)
-	jsPath           string
 	caches           = sync.Map{}
 )
 
@@ -98,9 +96,6 @@ func NewParser(id string, client http.Client) (*Parser, error) {
 		videoPageData, err := request.CacheGet(videoPageURL, client)
 		if err != nil {
 			return nil, err
-		}
-		if arr := jsPathRegexp.FindSubmatch(videoPageData); len(arr) >= 2 {
-			jsPath = string(arr[1])
 		}
 		if arr := initPlayerRegexp.FindSubmatch(videoPageData); len(arr) >= 2 {
 			player = gjson.ParseBytes(arr[1])

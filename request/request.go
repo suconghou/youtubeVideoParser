@@ -89,7 +89,7 @@ type cacheItem struct {
 	time    int64
 	ctx     context.Context
 	cancel  context.CancelFunc
-	data    *bytes.Buffer
+	data    []byte // immutable, safe to return to callers
 	err     error
 	loading bool
 }
@@ -121,9 +121,9 @@ func (l *LockGeter) DoRequest(url string, method string, reqHeaders http.Header,
 		if v.data == nil {
 			return nil, v.err
 		}
-		return v.data.Bytes(), v.err
+		return v.data, v.err
 	}
-	data, err := DoRequest(url, method, reqHeaders, body, client)
+	data, err := doRequestBytes(url, method, reqHeaders, body, client)
 	v.data = data
 	v.err = err
 	v.loading = false
@@ -131,7 +131,7 @@ func (l *LockGeter) DoRequest(url string, method string, reqHeaders http.Header,
 	if data == nil {
 		return nil, err
 	}
-	return data.Bytes(), err
+	return data, err
 }
 
 func (l *LockGeter) clean(now int64) {
@@ -143,18 +143,23 @@ func (l *LockGeter) clean(now int64) {
 		var v = value.(*cacheItem)
 		if v.time < now && !v.loading {
 			v.cancel()
-			if v.data != nil {
-				v.data.Reset()
-				bufferPool.Put(v.data)
-			}
 			l.caches.Delete(key)
 		}
 		return true
 	})
 }
 
-// LockGeter的调用都有bufferPool.Put,外部调用即时没有bufferPool.Put也不会内存泄露
+// DoRequest http data, the returned buffer is caller-owned and readonly.
 func DoRequest(url string, method string, reqHeaders http.Header, body io.Reader, client http.Client) (*bytes.Buffer, error) {
+	data, err := doRequestBytes(url, method, reqHeaders, body, client)
+	if err != nil {
+		return nil, err
+	}
+	return bytes.NewBuffer(bytes.Clone(data)), nil
+}
+
+// doRequestBytes http data, the return value is immutable and can be held forever.
+func doRequestBytes(url string, method string, reqHeaders http.Header, body io.Reader, client http.Client) ([]byte, error) {
 	req, err := http.NewRequest(method, url, body)
 	if err != nil {
 		return nil, err
@@ -168,15 +173,18 @@ func DoRequest(url string, method string, reqHeaders http.Header, body io.Reader
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("%s:%s", url, resp.Status)
 	}
-	var buffer = bufferPool.Get().(*bytes.Buffer)
-	buffer.Reset()
-	_, err = buffer.ReadFrom(resp.Body)
+	var buf = bufferPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	_, err = buf.ReadFrom(resp.Body)
 	if err != nil {
-		buffer.Reset()
-		bufferPool.Put(buffer)
+		buf.Reset()
+		bufferPool.Put(buf)
 		return nil, err
 	}
-	return buffer, nil
+	data := bytes.Clone(buf.Bytes())
+	buf.Reset()
+	bufferPool.Put(buf)
+	return data, nil
 }
 
 func CacheGet(url string, client http.Client) ([]byte, error) {

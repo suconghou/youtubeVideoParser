@@ -48,7 +48,7 @@ func routeMatch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.Write(bs)
+	_, _ = w.Write(bs)
 }
 
 func getInfo(id string) (*youtubevideoparser.VideoInfo, error) {
